@@ -13,7 +13,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Export compile commands for LSP
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 
 find_package(OpenGL REQUIRED)
-find_package(glfw3 3.4 REQUIRED)
+
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(extern/glfw)
+
+set(NFD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(NFD_BUILD_SDL2_TESTS OFF CACHE BOOL "" FORCE)
+set(NFD_BUILD_GLFW3_TESTS OFF CACHE BOOL "" FORCE)
+set(NFD_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(extern/nativefiledialog-extended)
 
 set(
 	PROJECT_HEADERS
@@ -91,7 +102,7 @@ set_target_properties(
 	COMPILE_WARNING_AS_ERROR ON
 )
 if(MSVC)
-	target_compile_options(${PROJECT_NAME} PRIVATE /W4)
+	# target_compile_options(${PROJECT_NAME} PRIVATE /W4)
 else()
 	target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -pedantic)
 endif()
@@ -102,7 +113,7 @@ target_include_directories(
 	src
 	${EXTERN_HEADERS}
 )
-target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL glfw)
+target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL glfw nfd)
 
 if(APPLE)
 	# Configure Info.plist

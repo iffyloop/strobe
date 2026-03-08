@@ -23,7 +23,7 @@ uniform isamplerBuffer u_effect_meta_tex;
 uniform samplerBuffer u_effect_params_tex;
 uniform samplerBuffer u_combine_params_tex;
 
-uniform sampler2D u_texture0;
+uniform sampler2D u_textures[16];
 
 uniform int u_op_push_primitive;
 uniform int u_op_combine;
@@ -227,11 +227,25 @@ vec3 sample_primitive_albedo(SceneEval hit) {
         uv = fract(hit.hit.p_local.xy * 0.25 + vec2(0.5));
     }
 
-    int texture_id = max(hit.hit.texture_id, 0);
-    if (texture_id == 0) {
-        return texture(u_texture0, uv).rgb;
+    int texture_id = clamp(hit.hit.texture_id, 0, 15);
+    switch (texture_id) {
+        case 0: return texture(u_textures[0], uv).rgb;
+        case 1: return texture(u_textures[1], uv).rgb;
+        case 2: return texture(u_textures[2], uv).rgb;
+        case 3: return texture(u_textures[3], uv).rgb;
+        case 4: return texture(u_textures[4], uv).rgb;
+        case 5: return texture(u_textures[5], uv).rgb;
+        case 6: return texture(u_textures[6], uv).rgb;
+        case 7: return texture(u_textures[7], uv).rgb;
+        case 8: return texture(u_textures[8], uv).rgb;
+        case 9: return texture(u_textures[9], uv).rgb;
+        case 10: return texture(u_textures[10], uv).rgb;
+        case 11: return texture(u_textures[11], uv).rgb;
+        case 12: return texture(u_textures[12], uv).rgb;
+        case 13: return texture(u_textures[13], uv).rgb;
+        case 14: return texture(u_textures[14], uv).rgb;
+        default: return texture(u_textures[15], uv).rgb;
     }
-    return texture(u_texture0, uv).rgb;
 }
 
 void main(void) {

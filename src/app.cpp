@@ -4,6 +4,8 @@
 #include "sg_editor.h"
 #include "sg_plugins.h"
 
+#include <nfd.h>
+
 namespace {
 
 void app_set_fly_mode(app_t& app, bool enabled) {
@@ -70,6 +72,11 @@ void app_update_fly_mode_input(app_t& app) {
 } // namespace
 
 void app_init(app_t& app) {
+	app.nfd_initialized = NFD_Init() == NFD_OKAY;
+	if (!app.nfd_initialized) {
+		std::cerr << "[app] native file dialog init failed: " << NFD_GetError() << std::endl;
+	}
+
 	sg_plugins_init_or_die();
 	app.sg_root = sg_node_union_create();
 	assert_release(app.sg_root != nullptr);
@@ -103,4 +110,8 @@ void app_update(app_t& app, f64 const dt) {
 
 void app_destroy(app_t& app) {
 	sg_renderer_destroy(app.sg_renderer);
+	if (app.nfd_initialized) {
+		NFD_Quit();
+		app.nfd_initialized = false;
+	}
 }

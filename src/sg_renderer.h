@@ -14,6 +14,11 @@ struct sg_renderer_buffer_texture_t {
 	GLuint texture = 0;
 };
 
+struct sg_renderer_image_texture_t {
+	GLuint texture = 0;
+	std::string path;
+};
+
 struct sg_renderer_t {
 	gl_vertex_buffers_t quad_vbo;
 	gl_render_pass_t primary_render_pass;
@@ -33,9 +38,15 @@ struct sg_renderer_t {
 	f32 preview_surface_epsilon = 0.001f;
 	f32 preview_max_trace_dist = 200.0f;
 	GLuint checker_texture = 0;
+
+	std::vector<sg_renderer_image_texture_t> primitive_textures;
+	std::unordered_map<std::string, s32> primitive_texture_ids_by_path;
 };
 
 void sg_renderer_init(sg_renderer_t& renderer);
 void sg_renderer_destroy(sg_renderer_t& renderer);
 void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& compiled_scene, fly_camera_t const& camera);
 bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled);
+
+s32 sg_renderer_get_or_load_primitive_texture(sg_renderer_t& renderer, std::string const& path);
+std::string const* sg_renderer_get_primitive_texture_path(sg_renderer_t const& renderer, s32 texture_id);

@@ -2,8 +2,8 @@
 
 #include "pch.h"
 
-#include "sg_node.h"
 #include "sg_compiler.h"
+#include "sg_node.h"
 #include "sg_renderer.h"
 
 #include "fly_camera.h"
@@ -24,6 +24,7 @@ struct app_t {
 	bool nav_keyboard_was_enabled = false;
 	f64 fly_last_cursor_x = 0.0;
 	f64 fly_last_cursor_y = 0.0;
+	bool nfd_initialized = false;
 };
 
 void app_init(app_t& app);

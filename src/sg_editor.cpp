@@ -4,6 +4,8 @@
 #include "sg_node.h"
 #include "sg_plugins.h"
 
+#include <nfd.h>
+
 static char const* sg_node_type_to_string(sg_node_type_t const type) {
 	auto const* def = sg_plugins_find_node_def_by_runtime_id(static_cast<s32>(type));
 	if (def == nullptr) {
@@ -27,10 +29,13 @@ static void sg_node_add_child(sg_node_t& parent, sg_node_type_t const type) {
 }
 
 static bool sg_node_is_descendant_of(sg_node_t const* node, sg_node_t const* ancestor) {
-	if (!node || !ancestor) return false;
+	if (!node || !ancestor)
+		return false;
 	for (auto const& child : ancestor->children) {
-		if (child.get() == node) return true;
-		if (sg_node_is_descendant_of(node, child.get())) return true;
+		if (child.get() == node)
+			return true;
+		if (sg_node_is_descendant_of(node, child.get()))
+			return true;
 	}
 	return false;
 }
@@ -51,6 +56,41 @@ static char const* sg_effect_type_to_string(sg_node_effect_type_t const type) {
 	return def->display_name.c_str();
 }
 
+static sg_node_prop_t* sg_node_find_prop(sg_node_t& node, char const* name) {
+	for (auto& prop : node.props) {
+		if (prop != nullptr && prop->get_name() == name) {
+			return prop.get();
+		}
+	}
+	return nullptr;
+}
+
+static bool sg_node_is_primitive(sg_node_t const& node) {
+	auto const* def = sg_plugins_find_node_def_by_runtime_id(static_cast<s32>(node.type));
+	return def != nullptr && def->category == sg_plugin_category_t::PRIMITIVE;
+}
+
+static bool sg_editor_pick_texture_path(std::string& out_path) {
+	nfdu8char_t* picked_path = nullptr;
+	nfdfilteritem_t const filters[1] = {
+		{"Images", "png,jpg,jpeg,bmp,tga,gif,webp"},
+	};
+	nfdopendialogu8args_t args = {0};
+	args.filterList = filters;
+	args.filterCount = 1;
+
+	nfdresult_t const result = NFD_OpenDialogU8_With(&picked_path, &args);
+	if (result == NFD_OKAY) {
+		out_path = picked_path;
+		NFD_FreePathU8(picked_path);
+		return true;
+	}
+	if (result == NFD_ERROR) {
+		std::cerr << "[sg_editor] texture picker failed: " << NFD_GetError() << std::endl;
+	}
+	return false;
+}
+
 static bool sg_node_render_tree(app_t& app, sg_node_t& parent, sg_node_t& node, bool is_root) {
 	bool const is_selected = (app.selected_node == &node);
 	bool did_delete = false;
@@ -59,8 +99,10 @@ static bool sg_node_render_tree(app_t& app, sg_node_t& parent, sg_node_t& node, 
 	bool const is_leaf = node.children.empty();
 
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-	if (is_leaf) flags |= ImGuiTreeNodeFlags_Leaf;
-	if (is_selected) flags |= ImGuiTreeNodeFlags_Selected;
+	if (is_leaf)
+		flags |= ImGuiTreeNodeFlags_Leaf;
+	if (is_selected)
+		flags |= ImGuiTreeNodeFlags_Selected;
 
 	if (node.ui.is_expanded) {
 		ImGui::SetNextItemOpen(true);
@@ -107,7 +149,9 @@ static bool sg_node_render_tree(app_t& app, sg_node_t& parent, sg_node_t& node, 
 				sg_editor_clear_selected_if_descendant(app, &node);
 				auto& parent_children = parent.children;
 				auto it = std::find_if(parent_children.begin(), parent_children.end(),
-					[&node](std::unique_ptr<sg_node_t> const& child) { return child.get() == &node; });
+					[&node](std::unique_ptr<sg_node_t> const& child) {
+						return child.get() == &node;
+					});
 				if (it != parent_children.end()) {
 					parent_children.erase(it);
 					did_delete = true;
@@ -143,7 +187,8 @@ void sg_editor_update(app_t& app) {
 
 	ImGui::SetNextWindowPos(ImVec2(0, 0));
 	ImGui::SetNextWindowSize(ImVec2(window_width, half_height));
-	ImGui::Begin("Scene Graph", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+	ImGui::Begin("Scene Graph", nullptr,
+		ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
 	sg_node_render_tree(app, *app.sg_root, *app.sg_root, true);
 
@@ -151,18 +196,54 @@ void sg_editor_update(app_t& app) {
 
 	ImGui::SetNextWindowPos(ImVec2(0, half_height));
 	ImGui::SetNextWindowSize(ImVec2(window_width, half_height));
-	ImGui::Begin("Properties", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+	ImGui::Begin("Properties", nullptr,
+		ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
 
 	if (app.selected_node != nullptr) {
 		sg_node_t& node = *app.selected_node;
 		ImGui::Text("%s", sg_node_type_to_string(node.type));
 		ImGui::Separator();
 
+		sg_node_prop_t* texture_id_prop = sg_node_find_prop(node, "texture_id");
+		if (sg_node_is_primitive(node) && texture_id_prop != nullptr) {
+			s32 const texture_id =
+				static_cast<s32>(std::lround(std::max(0.0f, texture_id_prop->get_cur_value())));
+			std::string const* current_path =
+				sg_renderer_get_primitive_texture_path(app.sg_renderer, texture_id);
+
+			ImGui::Text("Texture");
+			if (current_path == nullptr || current_path->empty()) {
+				ImGui::TextDisabled("Checker (default)");
+			} else {
+				ImGui::TextWrapped("%s", current_path->c_str());
+			}
+
+			if (ImGui::Button("Browse...")) {
+				std::string picked_path;
+				if (sg_editor_pick_texture_path(picked_path)) {
+					s32 const loaded_texture_id =
+						sg_renderer_get_or_load_primitive_texture(app.sg_renderer, picked_path);
+					if (loaded_texture_id > 0) {
+						texture_id_prop->set_default_value(static_cast<f32>(loaded_texture_id));
+					}
+				}
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Clear Texture")) {
+				texture_id_prop->set_default_value(0.0f);
+			}
+			ImGui::Separator();
+		}
+
 		for (size_t i = 0; i < node.props.size(); ++i) {
 			auto& prop = node.props[i];
+			if (prop != nullptr && prop->get_name() == "texture_id") {
+				continue;
+			}
 			ImGui::PushID((s32)i);
 			f32 value = prop->get_cur_value();
-			ImGui::DragFloat(prop->get_name().c_str(), &value, prop->get_drag_speed(), prop->get_min_value(), prop->get_max_value());
+			ImGui::DragFloat(prop->get_name().c_str(), &value, prop->get_drag_speed(),
+				prop->get_min_value(), prop->get_max_value());
 			prop->set_default_value(value);
 			ImGui::PopID();
 		}
@@ -170,14 +251,16 @@ void sg_editor_update(app_t& app) {
 		for (size_t effect_idx = 0; effect_idx < node.effects.size(); ++effect_idx) {
 			auto& effect = node.effects[effect_idx];
 			ImGui::PushID((s32)(1000 + effect_idx));
-			bool is_expanded = ImGui::CollapsingHeader(("Effect: " + std::string(sg_effect_type_to_string(effect->type))).c_str());
+			bool is_expanded = ImGui::CollapsingHeader(
+				("Effect: " + std::string(sg_effect_type_to_string(effect->type))).c_str());
 			if (is_expanded) {
 				ImGui::Indent();
 				for (size_t prop_idx = 0; prop_idx < effect->props.size(); ++prop_idx) {
 					auto& prop = effect->props[prop_idx];
 					ImGui::PushID((s32)prop_idx);
 					f32 value = prop->get_cur_value();
-					ImGui::DragFloat(prop->get_name().c_str(), &value, prop->get_drag_speed(), prop->get_min_value(), prop->get_max_value());
+					ImGui::DragFloat(prop->get_name().c_str(), &value, prop->get_drag_speed(),
+						prop->get_min_value(), prop->get_max_value());
 					prop->set_default_value(value);
 					ImGui::PopID();
 				}

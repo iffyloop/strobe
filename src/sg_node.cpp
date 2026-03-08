@@ -38,9 +38,17 @@ static u64 sg_node_alloc_id() {
 
 void sg_fill_props_from_plugin(sg_node_props_map_t& out_props, sg_plugin_def_t const& def) {
 	out_props.clear();
+	bool has_texture_id = false;
 	for (auto const& param : def.params) {
+		if (param.name == "texture_id") {
+			has_texture_id = true;
+		}
 		out_props.emplace_back(sg_node_prop_create(
 			param.name, param.default_value, param.min_value, param.max_value, param.drag_speed));
+	}
+
+	if (def.category == sg_plugin_category_t::PRIMITIVE && !has_texture_id) {
+		out_props.emplace_back(sg_node_prop_create("texture_id", 0.0f, 0.0f, 255.0f, 1.0f));
 	}
 }
 
@@ -130,7 +138,7 @@ std::unique_ptr<sg_node_t> sg_node_create_from_plugin_id(std::string const& plug
 
 std::unique_ptr<sg_node_effect_t> sg_node_effect_trs_create() {
 	std::cerr << "[sg_node] sg_node_effect_trs_create is deprecated in plugin mode; returning 'translate' effect"
-		      << std::endl;
+		  << std::endl;
 	return sg_node_effect_create_from_plugin_id("translate");
 }
 

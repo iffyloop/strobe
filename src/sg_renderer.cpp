@@ -6,6 +6,9 @@
 
 namespace {
 
+constexpr s32 k_max_texture_slots = 16;
+constexpr GLenum k_texture_unit_base = GL_TEXTURE8;
+
 template <typename T>
 void sg_renderer_upload_buffer_texture(
 	sg_renderer_buffer_texture_t const& buffer_texture, std::vector<T> const& data, GLenum internal_format) {
@@ -29,7 +32,11 @@ void sg_renderer_upload_buffer_texture(
 
 void sg_renderer_bind_buffer_texture(
 	gl_render_pass_t const& render_pass, char const* uniform_name, GLuint texture, GLenum texture_unit) {
-	gl_render_pass_uniform_int(render_pass, uniform_name, texture_unit - GL_TEXTURE0);
+	GLint const location = glGetUniformLocation(render_pass.shader.program, uniform_name);
+	if (location < 0) {
+		return;
+	}
+	glUniform1i(location, texture_unit - GL_TEXTURE0);
 	glActiveTexture(texture_unit);
 	glBindTexture(GL_TEXTURE_BUFFER, texture);
 }
@@ -53,8 +60,18 @@ void sg_renderer_create_checker_texture(sg_renderer_t& renderer) {
 	constexpr u8 magenta[3] = {255, 0, 255};
 	constexpr u8 black[3] = {0, 0, 0};
 	u8 const pixels[2 * 2 * 3] = {
-		magenta[0], magenta[1], magenta[2], black[0], black[1], black[2],
-		black[0],   black[1],   black[2],   magenta[0], magenta[1], magenta[2],
+		magenta[0],
+		magenta[1],
+		magenta[2],
+		black[0],
+		black[1],
+		black[2],
+		black[0],
+		black[1],
+		black[2],
+		magenta[0],
+		magenta[1],
+		magenta[2],
 	};
 
 	glGenTextures(1, &renderer.checker_texture);
@@ -65,6 +82,51 @@ void sg_renderer_create_checker_texture(sg_renderer_t& renderer) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+std::string sg_renderer_normalize_texture_path(std::string const& path) {
+	if (path.empty()) {
+		return path;
+	}
+
+	std::filesystem::path fs_path = std::filesystem::u8path(path);
+	std::error_code ec;
+	std::filesystem::path const absolute = std::filesystem::absolute(fs_path, ec);
+	if (!ec) {
+		fs_path = absolute;
+	}
+	fs_path = fs_path.lexically_normal();
+	return fs_path.string();
+}
+
+GLuint sg_renderer_texture_handle_for_id(sg_renderer_t const& renderer, s32 texture_id) {
+	if (texture_id <= 0) {
+		return renderer.checker_texture;
+	}
+
+	size_t const entry_index = static_cast<size_t>(texture_id - 1);
+	if (entry_index >= renderer.primitive_textures.size()) {
+		return renderer.checker_texture;
+	}
+
+	GLuint const texture = renderer.primitive_textures[entry_index].texture;
+	return texture == 0 ? renderer.checker_texture : texture;
+}
+
+void sg_renderer_bind_primitive_textures(sg_renderer_t const& renderer, gl_render_pass_t const& render_pass) {
+	GLint const location = glGetUniformLocation(render_pass.shader.program, "u_textures[0]");
+	if (location >= 0) {
+		GLint units[k_max_texture_slots] = {};
+		for (s32 i = 0; i < k_max_texture_slots; ++i) {
+			units[i] = static_cast<GLint>((k_texture_unit_base - GL_TEXTURE0) + i);
+		}
+		glUniform1iv(location, k_max_texture_slots, units);
+	}
+
+	for (s32 i = 0; i < k_max_texture_slots; ++i) {
+		glActiveTexture(k_texture_unit_base + i);
+		glBindTexture(GL_TEXTURE_2D, sg_renderer_texture_handle_for_id(renderer, i));
+	}
 }
 
 bool sg_renderer_rebuild_plugin_shader(sg_renderer_t& renderer, bool reload_plugins) {
@@ -188,6 +250,77 @@ void sg_renderer_destroy(sg_renderer_t& renderer) {
 		glDeleteTextures(1, &renderer.checker_texture);
 		renderer.checker_texture = 0;
 	}
+
+	for (auto& texture_entry : renderer.primitive_textures) {
+		if (texture_entry.texture != 0) {
+			glDeleteTextures(1, &texture_entry.texture);
+			texture_entry.texture = 0;
+		}
+	}
+	renderer.primitive_textures.clear();
+	renderer.primitive_texture_ids_by_path.clear();
+}
+
+s32 sg_renderer_get_or_load_primitive_texture(sg_renderer_t& renderer, std::string const& path) {
+	std::string const normalized_path = sg_renderer_normalize_texture_path(path);
+	if (normalized_path.empty()) {
+		return 0;
+	}
+
+	auto it = renderer.primitive_texture_ids_by_path.find(normalized_path);
+	if (it != renderer.primitive_texture_ids_by_path.end()) {
+		return it->second;
+	}
+
+	if (renderer.primitive_textures.size() + 1 >= static_cast<size_t>(k_max_texture_slots)) {
+		std::cerr << "[sg_renderer] maximum primitive texture slots reached (" << (k_max_texture_slots - 1)
+			  << ")" << std::endl;
+		return 0;
+	}
+
+	stbi_set_flip_vertically_on_load(1);
+	s32 width = 0;
+	s32 height = 0;
+	s32 channels = 0;
+	u8* pixels = stbi_load(normalized_path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
+	if (pixels == nullptr) {
+		std::cerr << "[sg_renderer] failed to load texture: " << normalized_path << std::endl;
+		return 0;
+	}
+
+	GLuint texture = 0;
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+	glGenerateMipmap(GL_TEXTURE_2D);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	stbi_image_free(pixels);
+
+	sg_renderer_image_texture_t entry;
+	entry.texture = texture;
+	entry.path = normalized_path;
+	renderer.primitive_textures.emplace_back(std::move(entry));
+
+	s32 const texture_id = static_cast<s32>(renderer.primitive_textures.size());
+	renderer.primitive_texture_ids_by_path[normalized_path] = texture_id;
+	return texture_id;
+}
+
+std::string const* sg_renderer_get_primitive_texture_path(sg_renderer_t const& renderer, s32 texture_id) {
+	if (texture_id <= 0) {
+		return nullptr;
+	}
+
+	size_t const entry_index = static_cast<size_t>(texture_id - 1);
+	if (entry_index >= renderer.primitive_textures.size()) {
+		return nullptr;
+	}
+
+	return &renderer.primitive_textures[entry_index].path;
 }
 
 void sg_renderer_update(
@@ -250,7 +383,7 @@ void sg_renderer_update(
 		renderer.primary_render_pass, "u_effect_meta_tex", renderer.effect_meta.texture, GL_TEXTURE6);
 	sg_renderer_bind_buffer_texture(
 		renderer.primary_render_pass, "u_effect_params_tex", renderer.effect_params.texture, GL_TEXTURE7);
-	gl_render_pass_uniform_texture(renderer.primary_render_pass, "u_texture0", renderer.checker_texture, GL_TEXTURE8);
+	sg_renderer_bind_primitive_textures(renderer, renderer.primary_render_pass);
 
 	gl_render_pass_draw(renderer.primary_render_pass, renderer.quad_vbo);
 	gl_render_pass_end(renderer.primary_render_pass);
