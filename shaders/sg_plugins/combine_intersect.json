@@ -1,0 +1,7 @@
+{
+  "id": "intersect",
+  "display_name": "Intersect",
+  "category": "combine",
+  "function": "sg_plugin_combine_intersect",
+  "glsl": "combine_intersect.glsl"
+}

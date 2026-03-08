@@ -1,0 +1,27 @@
+{
+  "id": "cube",
+  "display_name": "Cube",
+  "category": "primitive",
+  "function": "sg_plugin_primitive_cube",
+  "glsl": "primitive_cube.glsl",
+  "params": [
+    {
+      "name": "size_x",
+      "default": 1.0,
+      "min": 0.0001,
+      "drag_speed": 0.01
+    },
+    {
+      "name": "size_y",
+      "default": 1.0,
+      "min": 0.0001,
+      "drag_speed": 0.01
+    },
+    {
+      "name": "size_z",
+      "default": 1.0,
+      "min": 0.0001,
+      "drag_speed": 0.01
+    }
+  ]
+}

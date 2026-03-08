@@ -1,0 +1,21 @@
+include(BundleUtilities)
+
+# Set executable to the full path name of the executable created by CPack
+set(executable "${CMAKE_INSTALL_PREFIX}/@PROJECT_NAME@.exe")
+
+# Set other_libs to a list of full path names to additional
+# libraries that cannot be reached by dependency analysis.
+set(other_libs "")
+
+# Set dirs to a list of directories where prerequisite libraries
+# may be found:
+set(dirs
+   "@CMAKE_BINARY_DIR@/vcpkg_installed/x64-windows/bin"
+   "@CMAKE_CURRENT_SOURCE_DIR@/vcpkg_installed/x64-windows/bin"
+   "$ENV{VCPKG_ROOT}/installed/x64-windows/bin"
+   "@CMAKE_BINARY_DIR@/vcpkg_installed/x64-windows/debug/bin"
+   "@CMAKE_CURRENT_SOURCE_DIR@/vcpkg_installed/x64-windows/debug/bin"
+   "$ENV{VCPKG_ROOT}/installed/x64-windows/debug/bin"
+   )
+
+fixup_bundle("${executable}" "${other_libs}" "${dirs}")

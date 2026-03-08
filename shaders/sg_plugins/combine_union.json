@@ -1,0 +1,7 @@
+{
+  "id": "union",
+  "display_name": "Union",
+  "category": "combine",
+  "function": "sg_plugin_combine_union",
+  "glsl": "combine_union.glsl"
+}

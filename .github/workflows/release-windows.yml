@@ -1,0 +1,86 @@
+name: Release Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g., v0.1.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as prerelease"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+
+      - name: Configure CMake
+        id: configure
+        continue-on-error: true
+        run: |
+          mkdir build
+          cd build
+          cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ..
+
+      - name: Fix vcpkg SHA512 and retry on failure
+        if: steps.configure.outcome == 'failure'
+        run: |
+          $filePath = "C:/Users/runneradmin/AppData/Local/vcpkg/registries/git-trees/86e81b275f5e8d1643d5204b1f5edaf7bfcbde5b/portfile.cmake"
+          $oldHash = "SHA512 8b82e6785eda1982fd8f2a8321b0fff144062eb78cac6b9d0c87cba374cfaa3f2bde33a34069b2871ae548ce681f5a7e1247918c5215d92ed4836614548a1936"
+          $newHash = "SHA512 15b540d2fad25de837d7612456ea65b7fcfa25f886c48dcb3de025e079f5f43f45f1c0bd9a8435430d0e2fb9f0a6129719626dd4fd45dc61fc480f97762b2f56"
+
+          if (Test-Path $filePath) {
+            $content = Get-Content $filePath -Raw
+            $newContent = $content -replace [regex]::Escape($oldHash), $newHash
+            if ($content -ne $newContent) {
+              Set-Content $filePath -Value $newContent -NoNewline
+              Write-Host "SHA512 hash updated, retrying CMake..."
+              cd build
+              cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ..
+              if ($LASTEXITCODE -ne 0) { exit 1 }
+            } else {
+              Write-Host "Old hash not found in file, quitting. This may mean the Eigen3 bug in vcpkg has been fixed, and this retry step is no longer necessary."
+              exit 1
+            }
+          } else {
+            Write-Host "vcpkg portfile not found: $filePath"
+            exit 1
+          }
+
+      - name: Build
+        run: |
+          cd build
+          cmake --build . --config Release
+
+      - name: Package
+        run: |
+          cd build
+          cpack -G ZIP -C Release
+
+      - name: List build artifacts
+        run: |
+          cd build
+          dir *.zip
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: build/strobe-*-windows-x64.zip

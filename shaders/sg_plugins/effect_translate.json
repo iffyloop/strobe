@@ -1,0 +1,25 @@
+{
+  "id": "translate",
+  "display_name": "Translate",
+  "category": "effect",
+  "function": "sg_plugin_effect_translate",
+  "glsl": "effect_translate.glsl",
+  "default_on_nodes": true,
+  "params": [
+    {
+      "name": "pos_x",
+      "default": 0.0,
+      "drag_speed": 0.01
+    },
+    {
+      "name": "pos_y",
+      "default": 0.0,
+      "drag_speed": 0.01
+    },
+    {
+      "name": "pos_z",
+      "default": 0.0,
+      "drag_speed": 0.01
+    }
+  ]
+}

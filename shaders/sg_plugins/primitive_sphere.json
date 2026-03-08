@@ -1,0 +1,15 @@
+{
+  "id": "sphere",
+  "display_name": "Sphere",
+  "category": "primitive",
+  "function": "sg_plugin_primitive_sphere",
+  "glsl": "primitive_sphere.glsl",
+  "params": [
+    {
+      "name": "radius",
+      "default": 1.0,
+      "min": 0.0001,
+      "drag_speed": 0.01
+    }
+  ]
+}

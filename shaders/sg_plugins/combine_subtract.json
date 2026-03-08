@@ -1,0 +1,7 @@
+{
+  "id": "subtract",
+  "display_name": "Subtract",
+  "category": "combine",
+  "function": "sg_plugin_combine_subtract",
+  "glsl": "combine_subtract.glsl"
+}

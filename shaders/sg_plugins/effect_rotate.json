@@ -1,0 +1,25 @@
+{
+  "id": "rotate",
+  "display_name": "Rotate",
+  "category": "effect",
+  "function": "sg_plugin_effect_rotate",
+  "glsl": "effect_rotate.glsl",
+  "default_on_nodes": true,
+  "params": [
+    {
+      "name": "rot_x",
+      "default": 0.0,
+      "drag_speed": 0.01
+    },
+    {
+      "name": "rot_y",
+      "default": 0.0,
+      "drag_speed": 0.01
+    },
+    {
+      "name": "rot_z",
+      "default": 0.0,
+      "drag_speed": 0.01
+    }
+  ]
+}

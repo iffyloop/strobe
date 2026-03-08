@@ -1,0 +1,16 @@
+{
+  "id": "scale",
+  "display_name": "Scale",
+  "category": "effect",
+  "function": "sg_plugin_effect_scale",
+  "glsl": "effect_scale.glsl",
+  "default_on_nodes": true,
+  "params": [
+    {
+      "name": "scale",
+      "default": 1.0,
+      "min": 0.0001,
+      "drag_speed": 0.01
+    }
+  ]
+}
