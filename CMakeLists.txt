@@ -19,7 +19,6 @@ set(
 	PROJECT_HEADERS
 	"src/app.h"
 	"src/fly_camera.h"
-	"src/diffusion_renderer.h"
 	"src/gl_render_pass.h"
 	"src/gl_shader.h"
 	"src/gl_vertex_buffers.h"
@@ -34,7 +33,6 @@ set(
 	PROJECT_SOURCES
 	"src/main.cpp"
 	"src/app.cpp"
-	"src/diffusion_renderer.cpp"
 	"src/fly_camera.cpp"
 	"src/gl_render_pass.cpp"
 	"src/gl_shader.cpp"
@@ -72,11 +70,6 @@ file(
 
 file(GLOB PROJECT_CONFIGS CMakeLists.txt .gitattributes .gitignore .gitmodules)
 
-set(SD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(SD_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(SD_METAL ON CACHE BOOL "" FORCE)
-add_subdirectory(extern/strobe-stable-diffusion.cpp)
-
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCES} ${PROJECT_HEADERS} ${EXTERN_SOURCES} ${PROJECT_CONFIGS})
 
 # Hide console window on Windows while keeping console subsystem (allows main() function)
@@ -110,7 +103,6 @@ target_include_directories(
 	${EXTERN_HEADERS}
 )
 target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL glfw)
-target_link_libraries(${PROJECT_NAME} PRIVATE stable-diffusion)
 
 if(APPLE)
 	# Configure Info.plist

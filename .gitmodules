@@ -10,6 +10,3 @@
 [submodule "extern/stb"]
 	path = extern/stb
 	url = https://github.com/nothings/stb
-[submodule "extern/strobe-stable-diffusion.cpp"]
-	path = extern/strobe-stable-diffusion.cpp
-	url = https://github.com/iffyloop/strobe-stable-diffusion.cpp

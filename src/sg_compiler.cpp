@@ -47,6 +47,19 @@ s32 sg_get_scale_effect_runtime_id() {
 	return scale_effect->runtime_id;
 }
 
+s32 sg_get_primitive_texture_id(sg_node_props_map_t const& props) {
+	for (auto const& prop_ptr : props) {
+		if (prop_ptr == nullptr) {
+			continue;
+		}
+		if (prop_ptr->get_name() == "texture_id") {
+			f32 const raw_value = prop_ptr->get_cur_value();
+			return static_cast<s32>(std::lround(std::clamp(raw_value, 0.0f, 255.0f)));
+		}
+	}
+	return 0;
+}
+
 void sg_emit_push_primitive(sg_compile_ctx_t& ctx, glm::ivec4 const& prim_meta, glm::vec4 const& prim_params,
 	std::vector<glm::ivec4> const& effect_meta, std::vector<glm::vec4> const& effect_params, f32 scale) {
 	s32 const primitive_index = static_cast<s32>(ctx.out->primitive_meta.size());
@@ -114,7 +127,8 @@ bool sg_compile_node(sg_compile_ctx_t& ctx, sg_node_t const& node, sg_compile_st
 
 	if (auto const* primitive_def = sg_plugins_find_primitive_by_runtime_id(node_runtime_id)) {
 		glm::vec4 const prim_params = sg_pack_props(node.props, primitive_def->params);
-		glm::ivec4 const prim_meta = glm::ivec4(node_runtime_id, 0, 0, 0);
+		s32 const texture_id = sg_get_primitive_texture_id(node.props);
+		glm::ivec4 const prim_meta = glm::ivec4(node_runtime_id, texture_id, 0, 0);
 		sg_emit_push_primitive(
 			ctx, prim_meta, prim_params, node_state.effect_meta, node_state.effect_params, node_state.world_scale);
 		return true;
