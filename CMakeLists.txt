@@ -39,6 +39,7 @@ set(
 	"src/sg_node.h"
 	"src/sg_plugins.h"
 	"src/sg_renderer.h"
+	"src/scene_invalidation.h"
 )
 set(
 	PROJECT_SOURCES
@@ -54,6 +55,7 @@ set(
 	"src/sg_node.cpp"
 	"src/sg_plugins.cpp"
 	"src/sg_renderer.cpp"
+	"src/scene_invalidation.cpp"
 )
 
 set(

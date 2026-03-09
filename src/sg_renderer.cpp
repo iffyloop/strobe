@@ -13,6 +13,31 @@ constexpr u32 k_marching_cubes_max_tris_per_cell = 5;
 constexpr u32 k_marching_cubes_threads_per_axis = 4;
 constexpr u32 k_marching_cubes_vertex_stride_bytes = sizeof(glm::vec4) * 2;
 
+struct sg_renderer_chunk_layout_t {
+	u32 cells_per_axis = 0;
+	u32 chunk_resolution = 0;
+	u32 chunks_per_axis = 0;
+	u32 num_chunks = 0;
+	u32 chunk_vertex_capacity = 0;
+	u32 total_vertex_capacity = 0;
+};
+
+sg_renderer_chunk_layout_t sg_renderer_compute_chunk_layout(sg_renderer_t const& renderer) {
+	sg_renderer_chunk_layout_t layout;
+	layout.cells_per_axis = static_cast<u32>(std::max(1, renderer.marching_cubes_grid_resolution));
+	layout.chunk_resolution = std::max(1u, renderer.marching_cubes_chunk_resolution);
+	layout.chunks_per_axis = (layout.cells_per_axis + layout.chunk_resolution - 1u) / layout.chunk_resolution;
+	layout.num_chunks = layout.chunks_per_axis * layout.chunks_per_axis * layout.chunks_per_axis;
+	layout.chunk_vertex_capacity = layout.chunk_resolution * layout.chunk_resolution * layout.chunk_resolution *
+		k_marching_cubes_max_tris_per_cell * 3u;
+	layout.total_vertex_capacity = layout.num_chunks * layout.chunk_vertex_capacity;
+	return layout;
+}
+
+u32 sg_renderer_chunk_index(u32 x, u32 y, u32 z, u32 chunks_per_axis) {
+	return x + y * chunks_per_axis + z * chunks_per_axis * chunks_per_axis;
+}
+
 template <typename T>
 void sg_renderer_upload_buffer_texture(
 	sg_renderer_buffer_texture_t const& buffer_texture, std::vector<T> const& data, GLenum internal_format) {
@@ -113,14 +138,20 @@ void sg_renderer_destroy_marching_cubes_buffers(sg_renderer_t& renderer) {
 	}
 	renderer.marching_cubes_vertex_capacity = 0;
 	renderer.marching_cubes_vertex_count = 0;
+	renderer.marching_cubes_chunks_per_axis = 0;
+	renderer.marching_cubes_num_chunks = 0;
+	renderer.marching_cubes_chunk_vertex_capacity = 0;
+	renderer.marching_cubes_chunk_dirty.clear();
+	renderer.marching_cubes_chunk_vertex_counts.clear();
 }
 
 void sg_renderer_ensure_marching_cubes_buffers(sg_renderer_t& renderer) {
-	u32 const cells_per_axis = std::max(1, renderer.marching_cubes_grid_resolution);
-	u32 const num_cells = cells_per_axis * cells_per_axis * cells_per_axis;
-	u32 const required_vertices = num_cells * k_marching_cubes_max_tris_per_cell * 3;
-	if (required_vertices <= renderer.marching_cubes_vertex_capacity && renderer.marching_cubes_vertex_ssbo != 0 &&
-		renderer.marching_cubes_counter_ssbo != 0) {
+	sg_renderer_chunk_layout_t const layout = sg_renderer_compute_chunk_layout(renderer);
+	if (renderer.marching_cubes_vertex_ssbo != 0 && renderer.marching_cubes_counter_ssbo != 0 &&
+		renderer.marching_cubes_vertex_capacity >= layout.total_vertex_capacity &&
+		renderer.marching_cubes_num_chunks == layout.num_chunks &&
+		renderer.marching_cubes_chunk_vertex_capacity == layout.chunk_vertex_capacity &&
+		renderer.marching_cubes_chunks_per_axis == layout.chunks_per_axis) {
 		return;
 	}
 
@@ -129,17 +160,23 @@ void sg_renderer_ensure_marching_cubes_buffers(sg_renderer_t& renderer) {
 	glGenBuffers(1, &renderer.marching_cubes_vertex_ssbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, renderer.marching_cubes_vertex_ssbo);
 	glBufferData(GL_SHADER_STORAGE_BUFFER,
-		static_cast<GLsizeiptr>(required_vertices) * k_marching_cubes_vertex_stride_bytes, nullptr,
+		static_cast<GLsizeiptr>(layout.total_vertex_capacity) * k_marching_cubes_vertex_stride_bytes, nullptr,
 		GL_DYNAMIC_DRAW);
 
 	glGenBuffers(1, &renderer.marching_cubes_counter_ssbo);
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, renderer.marching_cubes_counter_ssbo);
-	GLuint const initial_counter = 0;
-	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(GLuint), &initial_counter, GL_DYNAMIC_DRAW);
+	std::vector<GLuint> initial_counters(layout.num_chunks, 0u);
+	glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(GLuint) * initial_counters.size(), initial_counters.data(),
+		GL_DYNAMIC_DRAW);
 
 	glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-	renderer.marching_cubes_vertex_capacity = required_vertices;
+	renderer.marching_cubes_vertex_capacity = layout.total_vertex_capacity;
 	renderer.marching_cubes_vertex_count = 0;
+	renderer.marching_cubes_chunks_per_axis = layout.chunks_per_axis;
+	renderer.marching_cubes_num_chunks = layout.num_chunks;
+	renderer.marching_cubes_chunk_vertex_capacity = layout.chunk_vertex_capacity;
+	renderer.marching_cubes_chunk_dirty.assign(layout.num_chunks, 1u);
+	renderer.marching_cubes_chunk_vertex_counts.assign(layout.num_chunks, 0u);
 }
 
 bool sg_renderer_rebuild_plugin_shader(sg_renderer_t& renderer, bool reload_plugins) {
@@ -363,94 +400,158 @@ std::string const* sg_renderer_get_primitive_texture_path(sg_renderer_t const& r
 	return &renderer.primitive_textures[entry_index].path;
 }
 
-void sg_renderer_update(
-	sg_renderer_t& renderer, sg_compiled_scene_t const& compiled_scene, fly_camera_t const& camera) {
-	sg_renderer_upload_buffer_texture(renderer.program, compiled_scene.program, GL_RGBA32I);
-	sg_renderer_upload_buffer_texture(renderer.combine_params, compiled_scene.combine_params, GL_RGBA32F);
-	sg_renderer_upload_buffer_texture(renderer.primitive_meta, compiled_scene.primitive_meta, GL_RGBA32I);
-	sg_renderer_upload_buffer_texture(renderer.primitive_params, compiled_scene.primitive_params, GL_RGBA32F);
-	sg_renderer_upload_buffer_texture(renderer.primitive_scale, compiled_scene.primitive_scale, GL_RGBA32F);
-	sg_renderer_upload_buffer_texture(
-		renderer.primitive_effect_ranges, compiled_scene.primitive_effect_ranges, GL_RGBA32I);
-	sg_renderer_upload_buffer_texture(renderer.effect_meta, compiled_scene.effect_meta, GL_RGBA32I);
-	sg_renderer_upload_buffer_texture(renderer.effect_params, compiled_scene.effect_params, GL_RGBA32F);
+void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& compiled_scene, fly_camera_t const& camera,
+	bool scene_gpu_buffers_dirty) {
+	if (scene_gpu_buffers_dirty) {
+		sg_renderer_upload_buffer_texture(renderer.program, compiled_scene.program, GL_RGBA32I);
+		sg_renderer_upload_buffer_texture(renderer.combine_params, compiled_scene.combine_params, GL_RGBA32F);
+		sg_renderer_upload_buffer_texture(renderer.primitive_meta, compiled_scene.primitive_meta, GL_RGBA32I);
+		sg_renderer_upload_buffer_texture(
+			renderer.primitive_params, compiled_scene.primitive_params, GL_RGBA32F);
+		sg_renderer_upload_buffer_texture(renderer.primitive_scale, compiled_scene.primitive_scale, GL_RGBA32F);
+		sg_renderer_upload_buffer_texture(
+			renderer.primitive_effect_ranges, compiled_scene.primitive_effect_ranges, GL_RGBA32I);
+		sg_renderer_upload_buffer_texture(renderer.effect_meta, compiled_scene.effect_meta, GL_RGBA32I);
+		sg_renderer_upload_buffer_texture(renderer.effect_params, compiled_scene.effect_params, GL_RGBA32F);
+	}
 
-	renderer.marching_cubes_vertex_count = 0;
+	if (!compiled_scene.has_output) {
+		renderer.marching_cubes_vertex_count = 0;
+		std::fill(renderer.marching_cubes_chunk_vertex_counts.begin(),
+			renderer.marching_cubes_chunk_vertex_counts.end(), 0u);
+	}
+
 	if (compiled_scene.has_output && renderer.marching_cubes_program != 0) {
 		sg_renderer_ensure_marching_cubes_buffers(renderer);
 
-		glUseProgram(renderer.marching_cubes_program);
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_has_scene"),
-			compiled_scene.has_output ? 1 : 0);
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_program_count"),
-			static_cast<GLint>(compiled_scene.program.size()));
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_max_stack_depth"),
-			static_cast<GLint>(compiled_scene.max_stack_depth));
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_op_push_primitive"),
-			SG_COMPILER_OP_PUSH_PRIMITIVE);
-		glUniform1i(
-			glGetUniformLocation(renderer.marching_cubes_program, "u_op_combine"), SG_COMPILER_OP_COMBINE);
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_combine_union"),
-			sg_runtime_id_or_zero("union"));
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_combine_intersect"),
-			sg_runtime_id_or_zero("intersect"));
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_combine_subtract"),
-			sg_runtime_id_or_zero("subtract"));
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_grid_resolution"),
-			renderer.marching_cubes_grid_resolution);
-		glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_smooth_normals"),
-			renderer.marching_cubes_smooth_normals ? 1 : 0);
-		glUniform1f(glGetUniformLocation(renderer.marching_cubes_program, "u_iso_level"),
-			renderer.marching_cubes_iso_level);
-		glUniform3f(glGetUniformLocation(renderer.marching_cubes_program, "u_bounds_min"),
-			-renderer.marching_cubes_bounds_extent, -renderer.marching_cubes_bounds_extent,
-			-renderer.marching_cubes_bounds_extent);
-		glUniform3f(glGetUniformLocation(renderer.marching_cubes_program, "u_bounds_max"),
-			renderer.marching_cubes_bounds_extent, renderer.marching_cubes_bounds_extent,
-			renderer.marching_cubes_bounds_extent);
-		glUniform1ui(glGetUniformLocation(renderer.marching_cubes_program, "u_vertex_capacity"),
-			renderer.marching_cubes_vertex_capacity);
-		glUniform1f(glGetUniformLocation(renderer.marching_cubes_program, "u_normal_epsilon"), 0.001f);
+		bool has_dirty_chunk = false;
+		for (u8 dirty_flag : renderer.marching_cubes_chunk_dirty) {
+			if (dirty_flag != 0) {
+				has_dirty_chunk = true;
+				break;
+			}
+		}
 
-		sg_renderer_bind_buffer_texture(
-			renderer.marching_cubes_program, "u_program_tex", renderer.program.texture, GL_TEXTURE0);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_combine_params_tex",
-			renderer.combine_params.texture, GL_TEXTURE1);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_meta_tex",
-			renderer.primitive_meta.texture, GL_TEXTURE2);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_params_tex",
-			renderer.primitive_params.texture, GL_TEXTURE3);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_scale_tex",
-			renderer.primitive_scale.texture, GL_TEXTURE4);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_effect_range_tex",
-			renderer.primitive_effect_ranges.texture, GL_TEXTURE5);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_effect_meta_tex",
-			renderer.effect_meta.texture, GL_TEXTURE6);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_effect_params_tex",
-			renderer.effect_params.texture, GL_TEXTURE7);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_mc_edge_table_tex",
-			renderer.marching_cubes_edge_table.texture, GL_TEXTURE8);
-		sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_mc_tri_table_tex",
-			renderer.marching_cubes_tri_table.texture, GL_TEXTURE9);
+		if (has_dirty_chunk) {
+			glUseProgram(renderer.marching_cubes_program);
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_has_scene"),
+				compiled_scene.has_output ? 1 : 0);
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_program_count"),
+				static_cast<GLint>(compiled_scene.program.size()));
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_max_stack_depth"),
+				static_cast<GLint>(compiled_scene.max_stack_depth));
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_op_push_primitive"),
+				SG_COMPILER_OP_PUSH_PRIMITIVE);
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_op_combine"),
+				SG_COMPILER_OP_COMBINE);
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_combine_union"),
+				sg_runtime_id_or_zero("union"));
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_combine_intersect"),
+				sg_runtime_id_or_zero("intersect"));
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_combine_subtract"),
+				sg_runtime_id_or_zero("subtract"));
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_grid_resolution"),
+				renderer.marching_cubes_grid_resolution);
+			glUniform1i(glGetUniformLocation(renderer.marching_cubes_program, "u_smooth_normals"),
+				renderer.marching_cubes_smooth_normals ? 1 : 0);
+			glUniform1f(glGetUniformLocation(renderer.marching_cubes_program, "u_iso_level"),
+				renderer.marching_cubes_iso_level);
+			glUniform3f(glGetUniformLocation(renderer.marching_cubes_program, "u_bounds_min"),
+				-renderer.marching_cubes_bounds_extent, -renderer.marching_cubes_bounds_extent,
+				-renderer.marching_cubes_bounds_extent);
+			glUniform3f(glGetUniformLocation(renderer.marching_cubes_program, "u_bounds_max"),
+				renderer.marching_cubes_bounds_extent, renderer.marching_cubes_bounds_extent,
+				renderer.marching_cubes_bounds_extent);
+			glUniform1ui(glGetUniformLocation(renderer.marching_cubes_program, "u_vertex_capacity"),
+				renderer.marching_cubes_vertex_capacity);
+			glUniform1f(glGetUniformLocation(renderer.marching_cubes_program, "u_normal_epsilon"), 0.001f);
 
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, renderer.marching_cubes_vertex_ssbo);
-		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, renderer.marching_cubes_counter_ssbo);
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, renderer.marching_cubes_counter_ssbo);
-		GLuint const reset_counter = 0;
-		glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLuint), &reset_counter);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_program_tex",
+				renderer.program.texture, GL_TEXTURE0);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_combine_params_tex",
+				renderer.combine_params.texture, GL_TEXTURE1);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_meta_tex",
+				renderer.primitive_meta.texture, GL_TEXTURE2);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_params_tex",
+				renderer.primitive_params.texture, GL_TEXTURE3);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_scale_tex",
+				renderer.primitive_scale.texture, GL_TEXTURE4);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_primitive_effect_range_tex",
+				renderer.primitive_effect_ranges.texture, GL_TEXTURE5);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_effect_meta_tex",
+				renderer.effect_meta.texture, GL_TEXTURE6);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_effect_params_tex",
+				renderer.effect_params.texture, GL_TEXTURE7);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_mc_edge_table_tex",
+				renderer.marching_cubes_edge_table.texture, GL_TEXTURE8);
+			sg_renderer_bind_buffer_texture(renderer.marching_cubes_program, "u_mc_tri_table_tex",
+				renderer.marching_cubes_tri_table.texture, GL_TEXTURE9);
 
-		u32 const groups = static_cast<u32>((renderer.marching_cubes_grid_resolution +
-							    static_cast<s32>(k_marching_cubes_threads_per_axis) - 1) /
-			k_marching_cubes_threads_per_axis);
-		glDispatchCompute(groups, groups, groups);
-		glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, renderer.marching_cubes_vertex_ssbo);
+			glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, renderer.marching_cubes_counter_ssbo);
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, renderer.marching_cubes_counter_ssbo);
 
-		GLuint generated_vertices = 0;
-		glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLuint), &generated_vertices);
-		renderer.marching_cubes_vertex_count =
-			std::min(generated_vertices, renderer.marching_cubes_vertex_capacity);
+			u32 const groups =
+				(renderer.marching_cubes_chunk_resolution + k_marching_cubes_threads_per_axis - 1u) /
+				k_marching_cubes_threads_per_axis;
+			u32 const chunks_per_axis = renderer.marching_cubes_chunks_per_axis;
+			u32 const chunk_cells = renderer.marching_cubes_chunk_resolution;
+			u32 const grid_cells = static_cast<u32>(std::max(1, renderer.marching_cubes_grid_resolution));
 
-		glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+			for (u32 chunk_idx = 0; chunk_idx < renderer.marching_cubes_num_chunks; ++chunk_idx) {
+				if (renderer.marching_cubes_chunk_dirty[chunk_idx] == 0) {
+					continue;
+				}
+
+				u32 const chunk_z = chunk_idx / (chunks_per_axis * chunks_per_axis);
+				u32 const rem = chunk_idx % (chunks_per_axis * chunks_per_axis);
+				u32 const chunk_y = rem / chunks_per_axis;
+				u32 const chunk_x = rem % chunks_per_axis;
+
+				glm::ivec3 const chunk_origin = glm::ivec3(static_cast<s32>(chunk_x * chunk_cells),
+					static_cast<s32>(chunk_y * chunk_cells),
+					static_cast<s32>(chunk_z * chunk_cells));
+				glm::ivec3 const chunk_limit =
+					glm::ivec3(static_cast<s32>(std::min(grid_cells, (chunk_x + 1u) * chunk_cells)),
+						static_cast<s32>(std::min(grid_cells, (chunk_y + 1u) * chunk_cells)),
+						static_cast<s32>(std::min(grid_cells, (chunk_z + 1u) * chunk_cells)));
+				glm::ivec3 const chunk_valid = chunk_limit - chunk_origin;
+
+				GLuint const reset_counter = 0;
+				glBufferSubData(GL_SHADER_STORAGE_BUFFER,
+					static_cast<GLintptr>(chunk_idx * sizeof(GLuint)), sizeof(GLuint),
+					&reset_counter);
+
+				glUniform1ui(glGetUniformLocation(renderer.marching_cubes_program, "u_chunk_index"),
+					chunk_idx);
+				glUniform1ui(
+					glGetUniformLocation(renderer.marching_cubes_program, "u_chunk_base_vertex"),
+					chunk_idx * renderer.marching_cubes_chunk_vertex_capacity);
+				glUniform3i(
+					glGetUniformLocation(renderer.marching_cubes_program, "u_chunk_cell_origin"),
+					chunk_origin.x, chunk_origin.y, chunk_origin.z);
+				glUniform3i(
+					glGetUniformLocation(renderer.marching_cubes_program, "u_chunk_valid_cells"),
+					chunk_valid.x, chunk_valid.y, chunk_valid.z);
+
+				glDispatchCompute(groups, groups, groups);
+				renderer.marching_cubes_chunk_dirty[chunk_idx] = 0;
+			}
+
+			glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_VERTEX_ATTRIB_ARRAY_BARRIER_BIT);
+			glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+				static_cast<GLsizeiptr>(renderer.marching_cubes_num_chunks * sizeof(GLuint)),
+				renderer.marching_cubes_chunk_vertex_counts.data());
+
+			u64 total_vertices = 0;
+			for (u32 chunk_vertices : renderer.marching_cubes_chunk_vertex_counts) {
+				total_vertices += chunk_vertices;
+			}
+			renderer.marching_cubes_vertex_count = static_cast<u32>(
+				std::min<u64>(total_vertices, renderer.marching_cubes_vertex_capacity));
+
+			glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+		}
 	}
 
 	gl_render_pass_begin(renderer.primary_render_pass);
@@ -464,7 +565,15 @@ void sg_renderer_update(
 	glBindVertexArray(renderer.marching_cubes_vao);
 	glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, renderer.marching_cubes_vertex_ssbo);
 	if (renderer.marching_cubes_vertex_count > 0) {
-		glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(renderer.marching_cubes_vertex_count));
+		for (u32 chunk_idx = 0; chunk_idx < renderer.marching_cubes_num_chunks; ++chunk_idx) {
+			u32 const chunk_vertex_count = renderer.marching_cubes_chunk_vertex_counts[chunk_idx];
+			if (chunk_vertex_count == 0) {
+				continue;
+			}
+			u32 const chunk_first_vertex = chunk_idx * renderer.marching_cubes_chunk_vertex_capacity;
+			glDrawArrays(GL_TRIANGLES, static_cast<GLint>(chunk_first_vertex),
+				static_cast<GLsizei>(chunk_vertex_count));
+		}
 	}
 	glBindVertexArray(0);
 	gl_render_pass_end(renderer.primary_render_pass);
@@ -473,6 +582,67 @@ void sg_renderer_update(
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_BUFFER, 0);
 	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void sg_renderer_mark_all_chunks_dirty(sg_renderer_t& renderer) {
+	if (renderer.marching_cubes_chunk_dirty.empty()) {
+		return;
+	}
+	std::fill(renderer.marching_cubes_chunk_dirty.begin(), renderer.marching_cubes_chunk_dirty.end(), 1u);
+}
+
+void sg_renderer_mark_bounds_dirty(sg_renderer_t& renderer, glm::vec3 const& bounds_min, glm::vec3 const& bounds_max) {
+	if (renderer.marching_cubes_chunk_dirty.empty() || renderer.marching_cubes_chunks_per_axis == 0u) {
+		return;
+	}
+	if (bounds_min.x > bounds_max.x || bounds_min.y > bounds_max.y || bounds_min.z > bounds_max.z) {
+		return;
+	}
+
+	f32 const extent = renderer.marching_cubes_bounds_extent;
+	if (extent <= 0.0f) {
+		sg_renderer_mark_all_chunks_dirty(renderer);
+		return;
+	}
+
+	glm::vec3 const grid_min(-extent, -extent, -extent);
+	glm::vec3 const grid_max(extent, extent, extent);
+	glm::vec3 const clamped_min = glm::max(bounds_min, grid_min);
+	glm::vec3 const clamped_max = glm::min(bounds_max, grid_max);
+	if (clamped_min.x > clamped_max.x || clamped_min.y > clamped_max.y || clamped_min.z > clamped_max.z) {
+		return;
+	}
+
+	u32 const grid_cells = static_cast<u32>(std::max(1, renderer.marching_cubes_grid_resolution));
+	f32 const cells_per_world_unit = static_cast<f32>(grid_cells) / (extent * 2.0f);
+	auto world_to_cell = [&](f32 value, f32 axis_min) {
+		return static_cast<s32>(std::floor((value - axis_min) * cells_per_world_unit));
+	};
+
+	s32 const min_x = std::clamp(world_to_cell(clamped_min.x, grid_min.x) - 1, 0, static_cast<s32>(grid_cells) - 1);
+	s32 const min_y = std::clamp(world_to_cell(clamped_min.y, grid_min.y) - 1, 0, static_cast<s32>(grid_cells) - 1);
+	s32 const min_z = std::clamp(world_to_cell(clamped_min.z, grid_min.z) - 1, 0, static_cast<s32>(grid_cells) - 1);
+	s32 const max_x = std::clamp(world_to_cell(clamped_max.x, grid_min.x) + 1, 0, static_cast<s32>(grid_cells) - 1);
+	s32 const max_y = std::clamp(world_to_cell(clamped_max.y, grid_min.y) + 1, 0, static_cast<s32>(grid_cells) - 1);
+	s32 const max_z = std::clamp(world_to_cell(clamped_max.z, grid_min.z) + 1, 0, static_cast<s32>(grid_cells) - 1);
+
+	u32 const chunk_cells = std::max(1u, renderer.marching_cubes_chunk_resolution);
+	u32 const min_chunk_x = static_cast<u32>(min_x) / chunk_cells;
+	u32 const min_chunk_y = static_cast<u32>(min_y) / chunk_cells;
+	u32 const min_chunk_z = static_cast<u32>(min_z) / chunk_cells;
+	u32 const max_chunk_x = static_cast<u32>(max_x) / chunk_cells;
+	u32 const max_chunk_y = static_cast<u32>(max_y) / chunk_cells;
+	u32 const max_chunk_z = static_cast<u32>(max_z) / chunk_cells;
+
+	u32 const chunks_per_axis = renderer.marching_cubes_chunks_per_axis;
+	for (u32 z = min_chunk_z; z <= max_chunk_z && z < chunks_per_axis; ++z) {
+		for (u32 y = min_chunk_y; y <= max_chunk_y && y < chunks_per_axis; ++y) {
+			for (u32 x = min_chunk_x; x <= max_chunk_x && x < chunks_per_axis; ++x) {
+				u32 const idx = sg_renderer_chunk_index(x, y, z, chunks_per_axis);
+				renderer.marching_cubes_chunk_dirty[idx] = 1u;
+			}
+		}
+	}
 }
 
 bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled) {
@@ -519,24 +689,33 @@ bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled) {
 	ImGui::Begin("Preview Controls###PreviewControlsWindow", nullptr, window_flags);
 	ImGui::Text("FPS: %.0f", ImGui::GetIO().Framerate);
 	ImGui::Text("Generated vertices: %u", renderer.marching_cubes_vertex_count);
+	bool remesh_settings_changed = false;
 
 	ImGui::SetNextItemWidth(140.0f);
-	ImGui::DragInt("Grid", &renderer.marching_cubes_grid_resolution, 1.0f, 8, 96);
+	remesh_settings_changed |= ImGui::DragInt("Grid", &renderer.marching_cubes_grid_resolution, 1.0f, 8, 96);
 
 	ImGui::SameLine();
-	ImGui::Checkbox("Smooth Normals", &renderer.marching_cubes_smooth_normals);
+	remesh_settings_changed |= ImGui::Checkbox("Smooth Normals", &renderer.marching_cubes_smooth_normals);
 
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(120.0f);
-	ImGui::DragFloat("Iso", &renderer.marching_cubes_iso_level, 0.005f, -2.0f, 2.0f, "%.3f");
+	remesh_settings_changed |=
+		ImGui::DragFloat("Iso", &renderer.marching_cubes_iso_level, 0.005f, -2.0f, 2.0f, "%.3f");
 
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(140.0f);
-	ImGui::DragFloat("Bounds", &renderer.marching_cubes_bounds_extent, 0.05f, 0.5f, 50.0f, "%.2f");
+	remesh_settings_changed |=
+		ImGui::DragFloat("Bounds", &renderer.marching_cubes_bounds_extent, 0.05f, 0.5f, 50.0f, "%.2f");
+
+	if (remesh_settings_changed) {
+		sg_renderer_mark_all_chunks_dirty(renderer);
+	}
 
 	if (ImGui::Button("Reload Plugins")) {
 		if (!sg_renderer_rebuild_plugin_shader(renderer, true)) {
 			std::cerr << "[sg_renderer] plugin reload failed; keeping previous shader" << std::endl;
+		} else {
+			sg_renderer_mark_all_chunks_dirty(renderer);
 		}
 	}
 

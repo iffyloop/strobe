@@ -8,6 +8,71 @@
 
 namespace {
 
+sg_node_prop_t* app_find_prop(sg_node_props_map_t& props, char const* name) {
+	for (auto& prop : props) {
+		if (prop != nullptr && prop->get_name() == name) {
+			return prop.get();
+		}
+	}
+	return nullptr;
+}
+
+sg_node_prop_t* app_find_effect_prop(sg_node_t& node, char const* name) {
+	for (auto& effect : node.effects) {
+		if (effect == nullptr) {
+			continue;
+		}
+		sg_node_prop_t* prop = app_find_prop(effect->props, name);
+		if (prop != nullptr) {
+			return prop;
+		}
+	}
+	return nullptr;
+}
+
+void app_add_random_primitives(sg_node_t& root, s32 count) {
+	std::mt19937 rng(std::random_device{}());
+	std::uniform_real_distribution<f32> pos_dist(-5.0f, 5.0f);
+	std::uniform_real_distribution<f32> cube_size_dist(0.3f, 1.2f);
+	std::uniform_real_distribution<f32> sphere_radius_dist(0.2f, 0.8f);
+	std::uniform_int_distribution<s32> type_dist(0, 1);
+
+	for (s32 i = 0; i < count; ++i) {
+		std::unique_ptr<sg_node_t> node = type_dist(rng) == 0 ? sg_node_cube_create() : sg_node_sphere_create();
+		if (node == nullptr) {
+			continue;
+		}
+
+		if (node->type == sg_node_type_t::CUBE) {
+			if (sg_node_prop_t* size_x = app_find_prop(node->props, "size_x")) {
+				size_x->set_default_value(cube_size_dist(rng));
+			}
+			if (sg_node_prop_t* size_y = app_find_prop(node->props, "size_y")) {
+				size_y->set_default_value(cube_size_dist(rng));
+			}
+			if (sg_node_prop_t* size_z = app_find_prop(node->props, "size_z")) {
+				size_z->set_default_value(cube_size_dist(rng));
+			}
+		} else if (node->type == sg_node_type_t::SPHERE) {
+			if (sg_node_prop_t* radius = app_find_prop(node->props, "radius")) {
+				radius->set_default_value(sphere_radius_dist(rng));
+			}
+		}
+
+		if (sg_node_prop_t* pos_x = app_find_effect_prop(*node, "pos_x")) {
+			pos_x->set_default_value(pos_dist(rng));
+		}
+		if (sg_node_prop_t* pos_y = app_find_effect_prop(*node, "pos_y")) {
+			pos_y->set_default_value(pos_dist(rng));
+		}
+		if (sg_node_prop_t* pos_z = app_find_effect_prop(*node, "pos_z")) {
+			pos_z->set_default_value(pos_dist(rng));
+		}
+
+		root.children.emplace_back(std::move(node));
+	}
+}
+
 void app_set_fly_mode(app_t& app, bool enabled) {
 	if (app.is_fly_mode == enabled) {
 		return;
@@ -80,12 +145,15 @@ void app_init(app_t& app) {
 	sg_plugins_init_or_die();
 	app.sg_root = sg_node_union_create();
 	assert_release(app.sg_root != nullptr);
+	app_add_random_primitives(*app.sg_root, 100);
 
 	app.camera.pos.z = 4.0f;
 
 	sg_editor_init();
 
 	sg_renderer_init(app.sg_renderer);
+	sg_renderer_mark_all_chunks_dirty(app.sg_renderer);
+	app.plugin_generation = sg_plugins_get().generation;
 }
 
 void app_update(app_t& app, f64 const dt) {
@@ -98,9 +166,27 @@ void app_update(app_t& app, f64 const dt) {
 		glm::radians(70.0f), 0.1f, app.sg_renderer.marching_cubes_bounds_extent * 4.0f);
 
 	sg_node_update(*app.sg_root.get(), dt);
-	sg_compile(app.sg_compiled_scene, *app.sg_root);
 
-	sg_renderer_update(app.sg_renderer, app.sg_compiled_scene, app.camera);
+	u64 const plugin_generation = sg_plugins_get().generation;
+	u64 const scene_hash = scene_hash_tree(*app.sg_root.get());
+	bool const scene_changed = scene_hash != app.scene_hash || plugin_generation != app.plugin_generation;
+	if (scene_changed) {
+		auto updated_bounds = scene_collect_primitive_bounds(*app.sg_root.get());
+		if (app.scene_hash == 0 || plugin_generation != app.plugin_generation) {
+			sg_renderer_mark_all_chunks_dirty(app.sg_renderer);
+		} else {
+			scene_mark_bounds_diff_dirty(app.sg_renderer, app.primitive_bounds_by_node_id, updated_bounds);
+		}
+		app.primitive_bounds_by_node_id = std::move(updated_bounds);
+		app.scene_hash = scene_hash;
+		app.plugin_generation = plugin_generation;
+		sg_compile(app.sg_compiled_scene, *app.sg_root);
+		app.scene_gpu_buffers_dirty = true;
+	} else {
+		app.scene_gpu_buffers_dirty = false;
+	}
+
+	sg_renderer_update(app.sg_renderer, app.sg_compiled_scene, app.camera, app.scene_gpu_buffers_dirty);
 
 	bool const wants_fly_mode = sg_renderer_update_imgui(app.sg_renderer, !app.is_fly_mode);
 	if (!app.is_fly_mode && wants_fly_mode) {

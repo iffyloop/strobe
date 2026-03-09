@@ -28,6 +28,12 @@ struct sg_renderer_t {
 	GLuint marching_cubes_counter_ssbo = 0;
 	u32 marching_cubes_vertex_capacity = 0;
 	u32 marching_cubes_vertex_count = 0;
+	u32 marching_cubes_chunk_resolution = 8;
+	u32 marching_cubes_chunks_per_axis = 0;
+	u32 marching_cubes_num_chunks = 0;
+	u32 marching_cubes_chunk_vertex_capacity = 0;
+	std::vector<u8> marching_cubes_chunk_dirty;
+	std::vector<u32> marching_cubes_chunk_vertex_counts;
 
 	sg_renderer_buffer_texture_t program;
 	sg_renderer_buffer_texture_t primitive_meta;
@@ -54,8 +60,11 @@ struct sg_renderer_t {
 
 void sg_renderer_init(sg_renderer_t& renderer);
 void sg_renderer_destroy(sg_renderer_t& renderer);
-void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& compiled_scene, fly_camera_t const& camera);
+void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& compiled_scene, fly_camera_t const& camera,
+	bool scene_gpu_buffers_dirty);
 bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled);
+void sg_renderer_mark_all_chunks_dirty(sg_renderer_t& renderer);
+void sg_renderer_mark_bounds_dirty(sg_renderer_t& renderer, glm::vec3 const& bounds_min, glm::vec3 const& bounds_max);
 
 s32 sg_renderer_get_or_load_primitive_texture(sg_renderer_t& renderer, std::string const& path);
 std::string const* sg_renderer_get_primitive_texture_path(sg_renderer_t const& renderer, s32 texture_id);

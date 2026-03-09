@@ -2,6 +2,7 @@
 
 #include "pch.h"
 
+#include "scene_invalidation.h"
 #include "sg_compiler.h"
 #include "sg_node.h"
 #include "sg_renderer.h"
@@ -25,6 +26,10 @@ struct app_t {
 	f64 fly_last_cursor_x = 0.0;
 	f64 fly_last_cursor_y = 0.0;
 	bool nfd_initialized = false;
+	u64 scene_hash = 0;
+	u64 plugin_generation = 0;
+	bool scene_gpu_buffers_dirty = true;
+	std::unordered_map<u64, scene_aabb_t> primitive_bounds_by_node_id;
 };
 
 void app_init(app_t& app);
