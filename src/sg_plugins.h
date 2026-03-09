@@ -46,7 +46,7 @@ void sg_plugins_init_or_die();
 sg_plugins_t const& sg_plugins_get();
 void sg_plugins_commit(sg_plugins_t&& plugins);
 bool sg_plugins_load_candidate(sg_plugins_t& out_plugins, std::string& out_error);
-bool sg_plugins_build_raymarch_fragment_source(
+bool sg_plugins_build_marching_cubes_compute_source(
 	sg_plugins_t const& plugins, std::string& out_src, std::string& out_error);
 
 sg_plugin_def_t const* sg_plugins_find_combine_by_runtime_id(s32 runtime_id);

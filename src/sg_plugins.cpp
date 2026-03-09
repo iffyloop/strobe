@@ -7,7 +7,7 @@
 namespace {
 
 constexpr char const* k_plugins_dir = "shaders/sg_plugins";
-constexpr char const* k_raymarch_template_file = "shaders/raymarch_template.frag";
+constexpr char const* k_marching_cubes_template_file = "shaders/marching_cubes_template.comp";
 
 sg_plugins_t g_plugins;
 bool g_plugins_initialized = false;
@@ -43,8 +43,8 @@ sg_plugin_category_t sg_parse_category(std::string const& s) {
 	return sg_plugin_category_t::INVALID;
 }
 
-bool sg_parse_plugin_manifest(
-	std::string const& manifest_path, nlohmann::json const& json, sg_plugin_def_t& out_def, std::string& out_error) {
+bool sg_parse_plugin_manifest(std::string const& manifest_path, nlohmann::json const& json, sg_plugin_def_t& out_def,
+	std::string& out_error) {
 	if (!json.contains("id") || !json["id"].is_string()) {
 		out_error = "missing string field 'id' in " + manifest_path;
 		return false;
@@ -178,7 +178,7 @@ bool sg_load_plugin_manifests(sg_plugins_t& out_plugins, std::string& out_error)
 	s32 next_runtime_id = 1;
 
 	auto assign_ids = [&](std::vector<sg_plugin_def_t>& defs, std::unordered_map<std::string, s32>& id_map,
-				      char const* category_name) {
+				  char const* category_name) {
 		std::sort(defs.begin(), defs.end(), [](sg_plugin_def_t const& a, sg_plugin_def_t const& b) {
 			return a.id < b.id;
 		});
@@ -247,9 +247,9 @@ bool sg_plugins_load_candidate(sg_plugins_t& out_plugins, std::string& out_error
 	return sg_load_plugin_manifests(out_plugins, out_error);
 }
 
-bool sg_plugins_build_raymarch_fragment_source(
+bool sg_plugins_build_marching_cubes_compute_source(
 	sg_plugins_t const& plugins, std::string& out_src, std::string& out_error) {
-	std::string const template_path = get_resources_prefix() + std::string(k_raymarch_template_file);
+	std::string const template_path = get_resources_prefix() + std::string(k_marching_cubes_template_file);
 	std::string template_src = sg_read_text_file(template_path);
 	if (template_src.empty()) {
 		out_error = "failed to read template shader: " + template_path;
@@ -258,7 +258,8 @@ bool sg_plugins_build_raymarch_fragment_source(
 
 	std::ostringstream plugin_functions;
 	plugin_functions << "\n";
-	auto append_plugin_sources = [&plugin_functions](std::vector<sg_plugin_def_t> const& defs, char const* category) {
+	auto append_plugin_sources = [&plugin_functions](
+					     std::vector<sg_plugin_def_t> const& defs, char const* category) {
 		for (auto const& def : defs) {
 			plugin_functions << "// plugin: " << category << "/" << def.id << "\n";
 			plugin_functions << def.glsl_source << "\n\n";

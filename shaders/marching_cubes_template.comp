@@ -1,0 +1,247 @@
+#version 430 core
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+uniform int u_has_scene;
+uniform int u_program_count;
+uniform int u_max_stack_depth;
+uniform int u_grid_resolution;
+uniform int u_smooth_normals;
+uniform float u_iso_level;
+uniform float u_normal_epsilon;
+uniform vec3 u_bounds_min;
+uniform vec3 u_bounds_max;
+uniform uint u_vertex_capacity;
+
+uniform isamplerBuffer u_program_tex;
+uniform isamplerBuffer u_primitive_meta_tex;
+uniform samplerBuffer u_primitive_params_tex;
+uniform samplerBuffer u_primitive_scale_tex;
+uniform isamplerBuffer u_primitive_effect_range_tex;
+uniform isamplerBuffer u_effect_meta_tex;
+uniform samplerBuffer u_effect_params_tex;
+uniform samplerBuffer u_combine_params_tex;
+uniform isamplerBuffer u_mc_edge_table_tex;
+uniform isamplerBuffer u_mc_tri_table_tex;
+
+uniform int u_op_push_primitive;
+uniform int u_op_combine;
+uniform int u_combine_union;
+uniform int u_combine_intersect;
+uniform int u_combine_subtract;
+
+const int MAX_PROGRAM_STACK = 24;
+
+/*__SG_PLUGIN_FUNCTIONS__*/
+
+/*__SG_PLUGIN_PRIMITIVE_DISPATCH__*/
+
+/*__SG_PLUGIN_COMBINE_DISPATCH__*/
+
+/*__SG_PLUGIN_EFFECT_DISPATCH__*/
+
+struct PrimitiveEval {
+    float dist;
+};
+
+struct SceneEval {
+    float dist;
+};
+
+struct McVertex {
+    vec4 pos;
+    vec4 normal;
+};
+
+layout(std430, binding = 0) buffer VertexBuffer {
+    McVertex vertices[];
+};
+
+layout(std430, binding = 1) buffer CounterBuffer {
+    uint vertex_count;
+};
+
+PrimitiveEval eval_primitive(int primitive_index, vec3 p_world) {
+    ivec4 primitive_meta = texelFetch(u_primitive_meta_tex, primitive_index);
+    vec4 primitive_params = texelFetch(u_primitive_params_tex, primitive_index);
+    float uniform_scale = max(texelFetch(u_primitive_scale_tex, primitive_index).x, 0.0001);
+
+    vec3 p_local = p_world;
+    ivec4 effect_range = texelFetch(u_primitive_effect_range_tex, primitive_index);
+    for (int i = 0; i < effect_range.y; ++i) {
+        int effect_index = effect_range.x + i;
+        ivec4 effect_meta = texelFetch(u_effect_meta_tex, effect_index);
+        vec4 effect_params = texelFetch(u_effect_params_tex, effect_index);
+        p_local = sg_apply_effect_plugin(effect_meta.x, p_local, effect_params);
+    }
+
+    PrimitiveEval out_eval;
+    out_eval.dist = sg_eval_primitive_plugin(primitive_meta.x, p_local, primitive_params) * uniform_scale;
+    return out_eval;
+}
+
+PrimitiveEval combine_eval(int combine_op, PrimitiveEval a, PrimitiveEval b, vec4 combine_params) {
+    PrimitiveEval out_eval = a;
+    out_eval.dist = sg_eval_combine_plugin(combine_op, a.dist, b.dist, combine_params);
+    return out_eval;
+}
+
+SceneEval eval_scene(vec3 p_world) {
+    PrimitiveEval stack[MAX_PROGRAM_STACK];
+    int sp = 0;
+
+    for (int i = 0; i < u_program_count; ++i) {
+        ivec4 inst = texelFetch(u_program_tex, i);
+
+        if (inst.x == u_op_push_primitive) {
+            if (sp >= MAX_PROGRAM_STACK) {
+                SceneEval fail;
+                fail.dist = 1e6;
+                return fail;
+            }
+            stack[sp++] = eval_primitive(inst.y, p_world);
+            continue;
+        }
+
+        if (inst.x != u_op_combine || sp < 2) {
+            SceneEval fail;
+            fail.dist = 1e6;
+            return fail;
+        }
+
+        PrimitiveEval b = stack[--sp];
+        PrimitiveEval a = stack[--sp];
+        vec4 combine_params = texelFetch(u_combine_params_tex, inst.z);
+        stack[sp++] = combine_eval(inst.y, a, b, combine_params);
+    }
+
+    SceneEval out_eval;
+    if (sp == 0) {
+        out_eval.dist = 1e6;
+        return out_eval;
+    }
+    out_eval.dist = stack[sp - 1].dist;
+    return out_eval;
+}
+
+float eval_scene_dist(vec3 p_world) {
+    return eval_scene(p_world).dist;
+}
+
+vec3 estimate_normal(vec3 p) {
+    vec3 e = vec3(u_normal_epsilon, 0.0, 0.0);
+    float dx = eval_scene_dist(p + e.xyy) - eval_scene_dist(p - e.xyy);
+    float dy = eval_scene_dist(p + e.yxy) - eval_scene_dist(p - e.yxy);
+    float dz = eval_scene_dist(p + e.yyx) - eval_scene_dist(p - e.yyx);
+    vec3 g = vec3(dx, dy, dz);
+    float len2 = dot(g, g);
+    return len2 > 1e-20 ? (g * inversesqrt(len2)) : vec3(0.0, 1.0, 0.0);
+}
+
+const ivec2 k_edge_corners[12] = ivec2[12](
+    ivec2(0, 1), ivec2(1, 2), ivec2(2, 3), ivec2(3, 0),
+    ivec2(4, 5), ivec2(5, 6), ivec2(6, 7), ivec2(7, 4),
+    ivec2(0, 4), ivec2(1, 5), ivec2(2, 6), ivec2(3, 7)
+);
+
+vec3 interp_iso(vec3 p0, vec3 p1, float d0, float d1) {
+    float denom = d1 - d0;
+    float t = 0.5;
+    if (abs(denom) > 1e-6) {
+        t = clamp((u_iso_level - d0) / denom, 0.0, 1.0);
+    }
+    return mix(p0, p1, t);
+}
+
+void emit_triangle(vec3 a, vec3 b, vec3 c) {
+    uint base = atomicAdd(vertex_count, 3u);
+    if (base + 2u >= u_vertex_capacity) {
+        return;
+    }
+
+    vec3 tri_cross = cross(b - a, c - a);
+    float tri_cross_len2 = dot(tri_cross, tri_cross);
+    vec3 tri_n = tri_cross_len2 > 1e-20 ? (tri_cross * inversesqrt(tri_cross_len2)) : vec3(0.0, 1.0, 0.0);
+    vec3 n0 = tri_n;
+    vec3 n1 = tri_n;
+    vec3 n2 = tri_n;
+    if (u_smooth_normals != 0) {
+        n0 = estimate_normal(a);
+        n1 = estimate_normal(b);
+        n2 = estimate_normal(c);
+    }
+    vertices[base + 0u].pos = vec4(a, 1.0);
+    vertices[base + 0u].normal = vec4(n0, 0.0);
+    vertices[base + 1u].pos = vec4(b, 1.0);
+    vertices[base + 1u].normal = vec4(n1, 0.0);
+    vertices[base + 2u].pos = vec4(c, 1.0);
+    vertices[base + 2u].normal = vec4(n2, 0.0);
+}
+
+void polygonise_cube(vec3 p[8], float d[8]) {
+    int case_index = 0;
+    for (int i = 0; i < 8; ++i) {
+        if (d[i] < u_iso_level) {
+            case_index |= (1 << i);
+        }
+    }
+
+    int edge_mask = texelFetch(u_mc_edge_table_tex, case_index).x;
+    if (edge_mask == 0) {
+        return;
+    }
+
+    vec3 edge_verts[12];
+    for (int e = 0; e < 12; ++e) {
+        if ((edge_mask & (1 << e)) == 0) {
+            continue;
+        }
+        ivec2 corners = k_edge_corners[e];
+        int a = corners.x;
+        int b = corners.y;
+        edge_verts[e] = interp_iso(p[a], p[b], d[a], d[b]);
+    }
+
+    int tri_base = case_index * 16;
+    for (int t = 0; t < 16; t += 3) {
+        int ia = texelFetch(u_mc_tri_table_tex, tri_base + t + 0).x;
+        if (ia < 0) {
+            break;
+        }
+        int ib = texelFetch(u_mc_tri_table_tex, tri_base + t + 1).x;
+        int ic = texelFetch(u_mc_tri_table_tex, tri_base + t + 2).x;
+        emit_triangle(edge_verts[ia], edge_verts[ic], edge_verts[ib]);
+    }
+}
+
+void main() {
+    if (u_has_scene == 0 || u_program_count == 0 || u_max_stack_depth > MAX_PROGRAM_STACK) {
+        return;
+    }
+
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+    if (any(greaterThanEqual(cell, ivec3(u_grid_resolution)))) {
+        return;
+    }
+
+    vec3 bounds_size = u_bounds_max - u_bounds_min;
+    vec3 step = bounds_size / float(u_grid_resolution);
+
+    vec3 base = u_bounds_min + vec3(cell) * step;
+    vec3 p[8];
+    p[0] = base + vec3(0.0, 0.0, 0.0) * step;
+    p[1] = base + vec3(1.0, 0.0, 0.0) * step;
+    p[2] = base + vec3(1.0, 1.0, 0.0) * step;
+    p[3] = base + vec3(0.0, 1.0, 0.0) * step;
+    p[4] = base + vec3(0.0, 0.0, 1.0) * step;
+    p[5] = base + vec3(1.0, 0.0, 1.0) * step;
+    p[6] = base + vec3(1.0, 1.0, 1.0) * step;
+    p[7] = base + vec3(0.0, 1.0, 1.0) * step;
+
+    float d[8];
+    for (int i = 0; i < 8; ++i) {
+        d[i] = eval_scene_dist(p[i]);
+    }
+
+    polygonise_cube(p, d);
+}

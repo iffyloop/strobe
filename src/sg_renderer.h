@@ -22,6 +22,12 @@ struct sg_renderer_image_texture_t {
 struct sg_renderer_t {
 	gl_vertex_buffers_t quad_vbo;
 	gl_render_pass_t primary_render_pass;
+	GLuint marching_cubes_program = 0;
+	GLuint marching_cubes_vao = 0;
+	GLuint marching_cubes_vertex_ssbo = 0;
+	GLuint marching_cubes_counter_ssbo = 0;
+	u32 marching_cubes_vertex_capacity = 0;
+	u32 marching_cubes_vertex_count = 0;
 
 	sg_renderer_buffer_texture_t program;
 	sg_renderer_buffer_texture_t primitive_meta;
@@ -31,12 +37,15 @@ struct sg_renderer_t {
 	sg_renderer_buffer_texture_t effect_meta;
 	sg_renderer_buffer_texture_t effect_params;
 	sg_renderer_buffer_texture_t combine_params;
+	sg_renderer_buffer_texture_t marching_cubes_edge_table;
+	sg_renderer_buffer_texture_t marching_cubes_tri_table;
 
 	std::string plugin_reload_status;
 
-	s32 preview_max_steps = 64;
-	f32 preview_surface_epsilon = 0.001f;
-	f32 preview_max_trace_dist = 200.0f;
+	s32 marching_cubes_grid_resolution = 40;
+	f32 marching_cubes_iso_level = 0.0f;
+	f32 marching_cubes_bounds_extent = 3.0f;
+	bool marching_cubes_smooth_normals = true;
 	GLuint checker_texture = 0;
 
 	std::vector<sg_renderer_image_texture_t> primitive_textures;

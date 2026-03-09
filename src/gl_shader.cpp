@@ -22,8 +22,8 @@ GLuint gl_shader_compile(GLenum const type, std::string const& filename, std::st
 	return shader;
 }
 
-bool gl_shader_try_link_program(
-	GLuint vert_shader, GLuint frag_shader, std::string const& debug_name, GLuint& out_program, std::string& out_error) {
+bool gl_shader_try_link_program(GLuint vert_shader, GLuint frag_shader, std::string const& debug_name,
+	GLuint& out_program, std::string& out_error) {
 	GLuint program = glCreateProgram();
 	glAttachShader(program, vert_shader);
 	glAttachShader(program, frag_shader);
@@ -103,4 +103,42 @@ bool gl_shader_try_build_program_from_file_and_source(GLuint& out_program, std::
 	glDeleteShader(vert_shader);
 	glDeleteShader(frag_shader);
 	return ok;
+}
+
+bool gl_shader_try_build_compute_program_from_source(
+	GLuint& out_program, std::string const& debug_name, std::string const& compute_source, std::string& out_error) {
+	out_program = 0;
+	GLuint const compute_shader = glCreateShader(GL_COMPUTE_SHADER);
+	GLchar const* const src_ptr = compute_source.data();
+	glShaderSource(compute_shader, 1, &src_ptr, nullptr);
+	glCompileShader(compute_shader);
+
+	GLint compile_ok = 0;
+	glGetShaderiv(compute_shader, GL_COMPILE_STATUS, &compile_ok);
+	if (!compile_ok) {
+		GLchar buf[4096];
+		glGetShaderInfoLog(compute_shader, sizeof(buf), nullptr, buf);
+		out_error = "Compute compilation failed for \"" + debug_name + "\":\n" + std::string(buf);
+		glDeleteShader(compute_shader);
+		return false;
+	}
+
+	GLuint program = glCreateProgram();
+	glAttachShader(program, compute_shader);
+	glLinkProgram(program);
+
+	GLint success = 0;
+	glGetProgramiv(program, GL_LINK_STATUS, &success);
+	if (!success) {
+		GLchar buf[4096];
+		glGetProgramInfoLog(program, sizeof(buf), nullptr, buf);
+		out_error = "Compute linking failed for \"" + debug_name + "\":\n" + std::string(buf);
+		glDeleteProgram(program);
+		glDeleteShader(compute_shader);
+		return false;
+	}
+
+	glDeleteShader(compute_shader);
+	out_program = program;
+	return true;
 }

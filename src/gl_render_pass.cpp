@@ -66,6 +66,9 @@ void gl_render_pass_begin(gl_render_pass_t const& render_pass) {
 	glViewport(0, 0, render_pass.width, render_pass.height);
 
 	for (auto const& [name, descriptor] : render_pass.internal_output_descriptors) {
+		if (descriptor.base_descriptor.format == GL_DEPTH_COMPONENT) {
+			continue;
+		}
 		glClearBufferfv(GL_COLOR, descriptor.location, glm::value_ptr(descriptor.base_descriptor.clear_color));
 	}
 

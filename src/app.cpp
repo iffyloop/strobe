@@ -95,7 +95,7 @@ void app_update(app_t& app, f64 const dt) {
 
 	fly_camera_update(app.camera, dt,
 		(f32)app.sg_renderer.primary_render_pass.width / (f32)app.sg_renderer.primary_render_pass.height,
-		glm::radians(70.0f), 0.1f, app.sg_renderer.preview_max_trace_dist);
+		glm::radians(70.0f), 0.1f, app.sg_renderer.marching_cubes_bounds_extent * 4.0f);
 
 	sg_node_update(*app.sg_root.get(), dt);
 	sg_compile(app.sg_compiled_scene, *app.sg_root);
