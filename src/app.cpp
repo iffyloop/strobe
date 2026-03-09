@@ -174,8 +174,11 @@ void app_update(app_t& app, f64 const dt) {
 		auto updated_bounds = scene_collect_primitive_bounds(*app.sg_root.get());
 		if (app.scene_hash == 0 || plugin_generation != app.plugin_generation) {
 			sg_renderer_mark_all_chunks_dirty(app.sg_renderer);
+		} else if (!scene_bounds_equal(app.primitive_bounds_by_node_id, updated_bounds)) {
+			scene_mark_primitive_overlap_dirty(
+				app.sg_renderer, app.primitive_bounds_by_node_id, updated_bounds);
 		} else {
-			scene_mark_bounds_diff_dirty(app.sg_renderer, app.primitive_bounds_by_node_id, updated_bounds);
+			scene_mark_bounds_set_dirty(app.sg_renderer, updated_bounds);
 		}
 		app.primitive_bounds_by_node_id = std::move(updated_bounds);
 		app.scene_hash = scene_hash;

@@ -26,12 +26,22 @@ struct sg_renderer_t {
 	GLuint marching_cubes_vao = 0;
 	GLuint marching_cubes_vertex_ssbo = 0;
 	GLuint marching_cubes_counter_ssbo = 0;
+	GLuint marching_cubes_indirect_buffer = 0;
+	GLuint marching_cubes_indirect_program = 0;
+	GLuint marching_cubes_density_program = 0;
+	GLuint marching_cubes_density_texture = 0;
 	u32 marching_cubes_vertex_capacity = 0;
 	u32 marching_cubes_vertex_count = 0;
 	u32 marching_cubes_chunk_resolution = 8;
 	u32 marching_cubes_chunks_per_axis = 0;
 	u32 marching_cubes_num_chunks = 0;
 	u32 marching_cubes_chunk_vertex_capacity = 0;
+	u32 marching_cubes_last_remeshed_chunk_count = 0;
+	u32 marching_cubes_chunk_scan_cursor = 0;
+	glm::vec3 marching_cubes_center = glm::vec3(0.0f);
+	bool marching_cubes_center_on_camera = false;
+	s32 marching_cubes_center_deadzone_chunks = 2;
+	s32 marching_cubes_remesh_budget_chunks = 64;
 	std::vector<u8> marching_cubes_chunk_dirty;
 	std::vector<u32> marching_cubes_chunk_vertex_counts;
 
@@ -39,6 +49,7 @@ struct sg_renderer_t {
 	sg_renderer_buffer_texture_t primitive_meta;
 	sg_renderer_buffer_texture_t primitive_params;
 	sg_renderer_buffer_texture_t primitive_scale;
+	sg_renderer_buffer_texture_t primitive_bounds;
 	sg_renderer_buffer_texture_t primitive_effect_ranges;
 	sg_renderer_buffer_texture_t effect_meta;
 	sg_renderer_buffer_texture_t effect_params;
@@ -48,9 +59,9 @@ struct sg_renderer_t {
 
 	std::string plugin_reload_status;
 
-	s32 marching_cubes_grid_resolution = 40;
+	s32 marching_cubes_grid_resolution = 96;
 	f32 marching_cubes_iso_level = 0.0f;
-	f32 marching_cubes_bounds_extent = 3.0f;
+	f32 marching_cubes_bounds_extent = 10.0f;
 	bool marching_cubes_smooth_normals = true;
 	GLuint checker_texture = 0;
 

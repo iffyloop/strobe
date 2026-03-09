@@ -15,11 +15,13 @@ struct sg_compiled_scene_t {
 	std::vector<glm::ivec4> primitive_meta;
 	std::vector<glm::vec4> primitive_params;
 	std::vector<glm::vec4> primitive_scale;
+	std::vector<glm::vec4> primitive_bounds;
 	std::vector<glm::ivec4> primitive_effect_ranges;
 	std::vector<glm::ivec4> effect_meta;
 	std::vector<glm::vec4> effect_params;
 
 	bool has_output = false;
+	bool union_only = true;
 	u32 max_stack_depth = 0;
 };
 

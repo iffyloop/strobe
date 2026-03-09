@@ -249,7 +249,13 @@ bool sg_plugins_load_candidate(sg_plugins_t& out_plugins, std::string& out_error
 
 bool sg_plugins_build_marching_cubes_compute_source(
 	sg_plugins_t const& plugins, std::string& out_src, std::string& out_error) {
-	std::string const template_path = get_resources_prefix() + std::string(k_marching_cubes_template_file);
+	return sg_plugins_build_compute_source_from_template(
+		plugins, k_marching_cubes_template_file, out_src, out_error);
+}
+
+bool sg_plugins_build_compute_source_from_template(
+	sg_plugins_t const& plugins, std::string const& template_file, std::string& out_src, std::string& out_error) {
+	std::string const template_path = get_resources_prefix() + template_file;
 	std::string template_src = sg_read_text_file(template_path);
 	if (template_src.empty()) {
 		out_error = "failed to read template shader: " + template_path;

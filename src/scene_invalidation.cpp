@@ -180,10 +180,34 @@ std::unordered_map<u64, scene_aabb_t> scene_collect_primitive_bounds(sg_node_t c
 	return bounds;
 }
 
-void scene_mark_bounds_diff_dirty(sg_renderer_t& renderer, std::unordered_map<u64, scene_aabb_t> const& old_bounds,
+bool scene_bounds_equal(
+	std::unordered_map<u64, scene_aabb_t> const& a, std::unordered_map<u64, scene_aabb_t> const& b) {
+	if (a.size() != b.size()) {
+		return false;
+	}
+	for (auto const& [node_id, a_box] : a) {
+		auto const it = b.find(node_id);
+		if (it == b.end()) {
+			return false;
+		}
+		if (!scene_aabb_equal(a_box, it->second)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+void scene_mark_bounds_set_dirty(sg_renderer_t& renderer, std::unordered_map<u64, scene_aabb_t> const& bounds) {
+	for (auto const& [_, box] : bounds) {
+		sg_renderer_mark_bounds_dirty(renderer, box.min, box.max);
+	}
+}
+
+void scene_mark_primitive_overlap_dirty(sg_renderer_t& renderer,
+	std::unordered_map<u64, scene_aabb_t> const& old_bounds,
 	std::unordered_map<u64, scene_aabb_t> const& new_bounds) {
 	for (auto const& [node_id, new_box] : new_bounds) {
-		auto old_it = old_bounds.find(node_id);
+		auto const old_it = old_bounds.find(node_id);
 		if (old_it == old_bounds.end()) {
 			sg_renderer_mark_bounds_dirty(renderer, new_box.min, new_box.max);
 			continue;
