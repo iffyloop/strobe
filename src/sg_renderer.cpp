@@ -762,13 +762,15 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 						static_cast<s32>(std::min(grid_cells, (chunk_y + 1u) * chunk_cells)),
 						static_cast<s32>(std::min(grid_cells, (chunk_z + 1u) * chunk_cells)));
 				glm::ivec3 const chunk_valid = chunk_limit - chunk_origin;
-				glm::ivec3 const point_origin = chunk_origin;
-				glm::ivec3 const point_valid = chunk_valid + glm::ivec3(1);
+				glm::ivec3 const point_min = glm::max(chunk_origin - glm::ivec3(1), glm::ivec3(0));
+				glm::ivec3 const point_max =
+					glm::min(chunk_limit + glm::ivec3(1), glm::ivec3(static_cast<s32>(grid_cells)));
+				glm::ivec3 const point_valid = point_max - point_min + glm::ivec3(1);
 
 				glUseProgram(renderer.marching_cubes_density_program);
 				glUniform3i(glGetUniformLocation(
 						    renderer.marching_cubes_density_program, "u_chunk_point_origin"),
-					point_origin.x, point_origin.y, point_origin.z);
+					point_min.x, point_min.y, point_min.z);
 				glUniform3i(glGetUniformLocation(
 						    renderer.marching_cubes_density_program, "u_chunk_valid_points"),
 					point_valid.x, point_valid.y, point_valid.z);

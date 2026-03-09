@@ -50,10 +50,17 @@ float density_at(ivec3 p) {
     return texelFetch(u_density_tex, clamped, 0).r;
 }
 
-vec3 estimate_normal_from_density(ivec3 gp) {
-    float dx = density_at(gp + ivec3(1, 0, 0)) - density_at(gp - ivec3(1, 0, 0));
-    float dy = density_at(gp + ivec3(0, 1, 0)) - density_at(gp - ivec3(0, 1, 0));
-    float dz = density_at(gp + ivec3(0, 0, 1)) - density_at(gp - ivec3(0, 0, 1));
+float density_world(vec3 p_world) {
+    vec3 uvw = (p_world - u_bounds_min) / (u_bounds_max - u_bounds_min);
+    uvw = clamp(uvw, vec3(0.0), vec3(1.0));
+    return texture(u_density_tex, uvw).r;
+}
+
+vec3 estimate_normal_from_density_world(vec3 p_world) {
+    vec3 step = (u_bounds_max - u_bounds_min) / float(u_grid_resolution);
+    float dx = density_world(p_world + vec3(step.x, 0.0, 0.0)) - density_world(p_world - vec3(step.x, 0.0, 0.0));
+    float dy = density_world(p_world + vec3(0.0, step.y, 0.0)) - density_world(p_world - vec3(0.0, step.y, 0.0));
+    float dz = density_world(p_world + vec3(0.0, 0.0, step.z)) - density_world(p_world - vec3(0.0, 0.0, step.z));
     vec3 g = vec3(dx, dy, dz);
     float len2 = dot(g, g);
     return len2 > 1e-20 ? normalize(g) : vec3(0.0, 1.0, 0.0);
@@ -107,21 +114,6 @@ void polygonise_cube(vec3 p[8], ivec3 gp[8], float d[8]) {
         edge_verts[e] = interp_iso(p[a], p[b], d[a], d[b]);
     }
 
-    vec3 corner_normals[8];
-    vec3 edge_normals[12];
-    if (u_smooth_normals != 0) {
-        for (int i = 0; i < 8; ++i) {
-            corner_normals[i] = estimate_normal_from_density(gp[i]);
-        }
-        for (int e = 0; e < 12; ++e) {
-            if ((edge_mask & (1 << e)) == 0) {
-                continue;
-            }
-            ivec2 corners = k_edge_corners[e];
-            edge_normals[e] = normalize(corner_normals[corners.x] + corner_normals[corners.y]);
-        }
-    }
-
     int tri_base = case_index * 16;
     for (int t = 0; t < 16; t += 3) {
         int ia = texelFetch(u_mc_tri_table_tex, tri_base + t + 0).x;
@@ -136,9 +128,9 @@ void polygonise_cube(vec3 p[8], ivec3 gp[8], float d[8]) {
         vec3 nb = tri_n;
         vec3 nc = tri_n;
         if (u_smooth_normals != 0) {
-            na = edge_normals[ia];
-            nb = edge_normals[ic];
-            nc = edge_normals[ib];
+            na = estimate_normal_from_density_world(edge_verts[ia]);
+            nb = estimate_normal_from_density_world(edge_verts[ic]);
+            nc = estimate_normal_from_density_world(edge_verts[ib]);
         }
 
         emit_triangle(edge_verts[ia], edge_verts[ic], edge_verts[ib], na, nb, nc);
