@@ -51,8 +51,11 @@ float density_at(ivec3 p) {
 }
 
 float density_world(vec3 p_world) {
-    vec3 uvw = (p_world - u_bounds_min) / (u_bounds_max - u_bounds_min);
-    uvw = clamp(uvw, vec3(0.0), vec3(1.0));
+    float grid_res = float(u_grid_resolution);
+    vec3 grid_pos = ((p_world - u_bounds_min) / (u_bounds_max - u_bounds_min)) * grid_res;
+    grid_pos = clamp(grid_pos, vec3(0.0), vec3(grid_res));
+    float tex_dim = grid_res + 1.0;
+    vec3 uvw = (grid_pos + vec3(0.5)) / tex_dim;
     return texture(u_density_tex, uvw).r;
 }
 

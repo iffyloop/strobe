@@ -11,7 +11,7 @@ int main() {
 	glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 	f32 const primary_monitor_scale = ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
 	GLFWwindow* window = glfwCreateWindow(
-		880.0f * primary_monitor_scale, 544.0f * primary_monitor_scale, "strobe", nullptr, nullptr);
+		1600.0f * primary_monitor_scale, 900.0f * primary_monitor_scale, "strobe", nullptr, nullptr);
 	glfwSetWindowSizeLimits(
 		window, 880.0f * primary_monitor_scale, 544.0f * primary_monitor_scale, GLFW_DONT_CARE, GLFW_DONT_CARE);
 	glfwMakeContextCurrent(window);

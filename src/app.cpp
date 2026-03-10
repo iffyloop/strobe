@@ -134,6 +134,79 @@ void app_update_fly_mode_input(app_t& app) {
 	fly_camera_mouse_update(app.camera, delta_x, delta_y);
 }
 
+sg_node_t* app_find_node_by_id_recursive(sg_node_t& node, u64 node_id) {
+	if (node.id == node_id) {
+		return &node;
+	}
+	for (auto& child : node.children) {
+		if (child == nullptr) {
+			continue;
+		}
+		if (sg_node_t* found = app_find_node_by_id_recursive(*child.get(), node_id)) {
+			return found;
+		}
+	}
+	return nullptr;
+}
+
+bool app_ray_aabb_intersection(
+	glm::vec3 const& ray_origin, glm::vec3 const& ray_dir, scene_aabb_t const& box, f32& out_t) {
+	glm::vec3 inv_dir(ray_dir.x != 0.0f ? 1.0f / ray_dir.x : std::numeric_limits<f32>::infinity(),
+		ray_dir.y != 0.0f ? 1.0f / ray_dir.y : std::numeric_limits<f32>::infinity(),
+		ray_dir.z != 0.0f ? 1.0f / ray_dir.z : std::numeric_limits<f32>::infinity());
+
+	glm::vec3 t0 = (box.min - ray_origin) * inv_dir;
+	glm::vec3 t1 = (box.max - ray_origin) * inv_dir;
+	glm::vec3 t_min = glm::min(t0, t1);
+	glm::vec3 t_max = glm::max(t0, t1);
+
+	f32 const near_t = std::max(std::max(t_min.x, t_min.y), t_min.z);
+	f32 const far_t = std::min(std::min(t_max.x, t_max.y), t_max.z);
+	if (far_t < 0.0f || near_t > far_t) {
+		return false;
+	}
+	out_t = near_t >= 0.0f ? near_t : far_t;
+	return true;
+}
+
+void app_pick_node_from_preview(app_t& app, glm::vec2 const& uv) {
+	if (app.sg_root == nullptr || app.primitive_bounds_by_node_id.empty()) {
+		return;
+	}
+
+	f32 const ndc_x = uv.x * 2.0f - 1.0f;
+	f32 const ndc_y = 1.0f - uv.y * 2.0f;
+	glm::mat4 const inv_view_proj = glm::inverse(app.camera.proj_mat * app.camera.view_mat);
+	glm::vec4 near_clip(ndc_x, ndc_y, -1.0f, 1.0f);
+	glm::vec4 far_clip(ndc_x, ndc_y, 1.0f, 1.0f);
+	glm::vec4 near_world_h = inv_view_proj * near_clip;
+	glm::vec4 far_world_h = inv_view_proj * far_clip;
+	if (near_world_h.w == 0.0f || far_world_h.w == 0.0f) {
+		return;
+	}
+	glm::vec3 const near_world = glm::vec3(near_world_h) / near_world_h.w;
+	glm::vec3 const far_world = glm::vec3(far_world_h) / far_world_h.w;
+	glm::vec3 const ray_origin = near_world;
+	glm::vec3 const ray_dir = glm::normalize(far_world - near_world);
+
+	u64 best_id = 0;
+	f32 best_t = std::numeric_limits<f32>::infinity();
+	for (auto const& [node_id, bounds] : app.primitive_bounds_by_node_id) {
+		f32 hit_t = 0.0f;
+		if (!app_ray_aabb_intersection(ray_origin, ray_dir, bounds, hit_t)) {
+			continue;
+		}
+		if (hit_t < best_t) {
+			best_t = hit_t;
+			best_id = node_id;
+		}
+	}
+
+	if (best_id != 0) {
+		app.selected_node = app_find_node_by_id_recursive(*app.sg_root.get(), best_id);
+	}
+}
+
 } // namespace
 
 void app_init(app_t& app) {
@@ -191,8 +264,12 @@ void app_update(app_t& app, f64 const dt) {
 
 	sg_renderer_update(app.sg_renderer, app.sg_compiled_scene, app.camera, app.scene_gpu_buffers_dirty);
 
-	bool const wants_fly_mode = sg_renderer_update_imgui(app.sg_renderer, !app.is_fly_mode);
-	if (!app.is_fly_mode && wants_fly_mode) {
+	sg_preview_interaction_t const preview_interaction =
+		sg_renderer_update_imgui(app.sg_renderer, !app.is_fly_mode);
+	if (preview_interaction.pick_requested) {
+		app_pick_node_from_preview(app, preview_interaction.pick_uv);
+	}
+	if (!app.is_fly_mode && preview_interaction.fly_mode_requested) {
 		app_set_fly_mode(app, true);
 	}
 }

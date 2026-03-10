@@ -919,7 +919,8 @@ void sg_renderer_mark_bounds_dirty(sg_renderer_t& renderer, glm::vec3 const& bou
 	}
 }
 
-bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled) {
+sg_preview_interaction_t sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled) {
+	sg_preview_interaction_t interaction;
 	f32 const window_width = ImGui::GetIO().DisplaySize.x - 400.0f;
 	f32 const window_height = ImGui::GetIO().DisplaySize.y;
 	f32 const controls_height = 140.0f;
@@ -955,7 +956,21 @@ bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled) {
 	ImGui::SetCursorPos(ImGui::GetCursorPos() + ImVec2(offset_x, offset_y));
 	ImGui::Image(display_texture, ImVec2(display_width, display_height), ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f));
 
-	bool const clicked = input_enabled && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+	if (input_enabled && ImGui::IsItemHovered()) {
+		if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+			ImVec2 const image_min = ImGui::GetItemRectMin();
+			ImVec2 const image_max = ImGui::GetItemRectMax();
+			ImVec2 const mouse = ImGui::GetMousePos();
+			f32 const width = std::max(1.0f, image_max.x - image_min.x);
+			f32 const height = std::max(1.0f, image_max.y - image_min.y);
+			interaction.pick_requested = true;
+			interaction.pick_uv.x = std::clamp((mouse.x - image_min.x) / width, 0.0f, 1.0f);
+			interaction.pick_uv.y = std::clamp((mouse.y - image_min.y) / height, 0.0f, 1.0f);
+		}
+		if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+			interaction.fly_mode_requested = true;
+		}
+	}
 	ImGui::End();
 
 	ImGui::SetNextWindowPos(ImVec2(400, preview_height));
@@ -1015,5 +1030,5 @@ bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled) {
 	}
 
 	ImGui::End();
-	return clicked;
+	return interaction;
 }

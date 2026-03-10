@@ -19,6 +19,12 @@ struct sg_renderer_image_texture_t {
 	std::string path;
 };
 
+struct sg_preview_interaction_t {
+	bool pick_requested = false;
+	bool fly_mode_requested = false;
+	glm::vec2 pick_uv = glm::vec2(0.5f, 0.5f);
+};
+
 struct sg_renderer_t {
 	gl_vertex_buffers_t quad_vbo;
 	gl_render_pass_t primary_render_pass;
@@ -73,7 +79,7 @@ void sg_renderer_init(sg_renderer_t& renderer);
 void sg_renderer_destroy(sg_renderer_t& renderer);
 void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& compiled_scene, fly_camera_t const& camera,
 	bool scene_gpu_buffers_dirty);
-bool sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled);
+sg_preview_interaction_t sg_renderer_update_imgui(sg_renderer_t& renderer, bool input_enabled);
 void sg_renderer_mark_all_chunks_dirty(sg_renderer_t& renderer);
 void sg_renderer_mark_bounds_dirty(sg_renderer_t& renderer, glm::vec3 const& bounds_min, glm::vec3 const& bounds_max);
 
