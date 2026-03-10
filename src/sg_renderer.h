@@ -65,9 +65,9 @@ struct sg_renderer_t {
 
 	std::string plugin_reload_status;
 
-	s32 marching_cubes_grid_resolution = 96;
+	s32 marching_cubes_grid_resolution = 256;
 	f32 marching_cubes_iso_level = 0.0f;
-	f32 marching_cubes_bounds_extent = 10.0f;
+	f32 marching_cubes_bounds_extent = 32.0f;
 	bool marching_cubes_smooth_normals = true;
 	GLuint checker_texture = 0;
 

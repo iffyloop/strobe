@@ -32,7 +32,7 @@ sg_node_prop_t* app_find_effect_prop(sg_node_t& node, char const* name) {
 
 void app_add_random_primitives(sg_node_t& root, s32 count) {
 	std::mt19937 rng(std::random_device{}());
-	std::uniform_real_distribution<f32> pos_dist(-5.0f, 5.0f);
+	std::uniform_real_distribution<f32> pos_dist(-15.0f, 15.0f);
 	std::uniform_real_distribution<f32> cube_size_dist(0.3f, 1.2f);
 	std::uniform_real_distribution<f32> sphere_radius_dist(0.2f, 0.8f);
 	std::uniform_int_distribution<s32> type_dist(0, 1);
@@ -218,7 +218,7 @@ void app_init(app_t& app) {
 	sg_plugins_init_or_die();
 	app.sg_root = sg_node_union_create();
 	assert_release(app.sg_root != nullptr);
-	app_add_random_primitives(*app.sg_root, 100);
+	app_add_random_primitives(*app.sg_root, 1000);
 
 	app.camera.pos.z = 4.0f;
 
