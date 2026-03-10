@@ -9,6 +9,7 @@ uniform int u_grid_resolution;
 uniform float u_iso_level;
 uniform int u_clipmap_levels;
 uniform int u_debug_lod;
+uniform int u_debug_surface_mode;
 uniform vec3 u_bounds_min[4];
 uniform vec3 u_bounds_max[4];
 uniform vec3 u_camera_pos;
@@ -88,11 +89,63 @@ vec3 estimate_normal(vec3 p_world, vec3 step) {
     return len2 > 1e-20 ? normalize(g) : vec3(0.0, 1.0, 0.0);
 }
 
+vec3 lod_cell_step(int level) {
+    level = clamp(level, 0, max(u_clipmap_levels - 1, 0));
+    vec3 step = (u_bounds_max[level] - u_bounds_min[level]) / float(max(u_grid_resolution, 1));
+    return max(step, vec3(1e-5));
+}
+
+vec3 refine_hit_gradient(vec3 p_world) {
+    vec3 p = p_world;
+    for (int i = 0; i < 3; ++i) {
+        int level = choose_lod(p);
+        vec3 step = lod_cell_step(level) * 0.5;
+        float f = density_world(p) - u_iso_level;
+        if (abs(f) < 1e-5) {
+            break;
+        }
+
+        vec3 n = estimate_normal(p, step);
+        float max_correction = max(max(step.x, step.y), step.z) * 1.5;
+        float correction = clamp(f, -max_correction, max_correction);
+        p -= n * correction;
+    }
+    return p;
+}
+
 vec3 lod_debug_color(int level) {
     if (level == 0) return vec3(0.95, 0.25, 0.2);
     if (level == 1) return vec3(0.95, 0.75, 0.2);
     if (level == 2) return vec3(0.2, 0.85, 0.35);
     return vec3(0.2, 0.55, 0.95);
+}
+
+float refine_root(vec3 ro, vec3 rd, float ta, float tb, float da, float db) {
+    float a = ta;
+    float b = tb;
+    float fa = da;
+    float fb = db;
+
+    for (int i = 0; i < 10; ++i) {
+        float denom = (fb - fa);
+        float t_secant = abs(denom) > 1e-8 ? (a * fb - b * fa) / denom : 0.5 * (a + b);
+        t_secant = clamp(t_secant, min(a, b), max(a, b));
+
+        float fm = density_world(ro + rd * t_secant) - u_iso_level;
+        if (abs(fm) < 1e-5 || abs(b - a) < 1e-5) {
+            return t_secant;
+        }
+
+        if ((fa <= 0.0 && fm <= 0.0) || (fa >= 0.0 && fm >= 0.0)) {
+            a = t_secant;
+            fa = fm;
+        } else {
+            b = t_secant;
+            fb = fm;
+        }
+    }
+
+    return 0.5 * (a + b);
 }
 
 void main() {
@@ -122,7 +175,7 @@ void main() {
     float t_end = t_hit.y;
     vec3 cell_step = (u_bounds_max[0] - u_bounds_min[0]) / float(max(u_grid_resolution, 1));
 
-    float min_step = max(min(min(cell_step.x, cell_step.y), cell_step.z) * 0.15, 0.0005);
+    float min_step = max(min(min(cell_step.x, cell_step.y), cell_step.z) * 0.04, 0.00025);
     float max_step = max(min(min(cell_step.x, cell_step.y), cell_step.z) * 3.0, 0.002);
 
     float prev_t = t;
@@ -137,20 +190,7 @@ void main() {
         vec3 p = ro + rd * t;
         float d = density_world(p) - u_iso_level;
         if ((prev_d <= 0.0 && d >= 0.0) || (prev_d >= 0.0 && d <= 0.0)) {
-            float a = prev_t;
-            float b = t;
-            float da = prev_d;
-            for (int j = 0; j < 5; ++j) {
-                float m = 0.5 * (a + b);
-                float dm = density_world(ro + rd * m) - u_iso_level;
-                if ((da <= 0.0 && dm <= 0.0) || (da >= 0.0 && dm >= 0.0)) {
-                    a = m;
-                    da = dm;
-                } else {
-                    b = m;
-                }
-            }
-            t = 0.5 * (a + b);
+            t = refine_root(ro, rd, prev_t, t, prev_d, d);
             hit_pos = ro + rd * t;
             hit = true;
             break;
@@ -164,8 +204,31 @@ void main() {
     }
 
     int hit_lod = choose_lod(hit_pos);
-    if (u_debug_lod != 0) {
-        vec3 c = lod_debug_color(hit_lod);
+    if (u_debug_surface_mode != 0 || u_debug_lod != 0) {
+        vec3 c = vec3(0.0);
+        int mode = u_debug_surface_mode;
+        if (u_debug_lod != 0) {
+            mode = 1;
+        }
+
+        if (mode == 1) {
+            c = lod_debug_color(hit_lod);
+        } else if (mode == 2) {
+            float grid_res = float(u_grid_resolution);
+            vec3 grid_pos = ((hit_pos - u_bounds_min[hit_lod]) /
+                (u_bounds_max[hit_lod] - u_bounds_min[hit_lod])) * grid_res;
+            c = clamp(grid_pos / max(grid_res, 1.0), vec3(0.0), vec3(1.0));
+        } else if (mode == 3) {
+            float residual = abs(density_world(hit_pos) - u_iso_level);
+            vec3 step = lod_cell_step(hit_lod);
+            float scale = max(max(step.x, step.y), step.z);
+            float v = clamp(residual / max(scale, 1e-5), 0.0, 1.0);
+            c = mix(vec3(0.1, 0.8, 0.2), vec3(1.0, 0.15, 0.1), v);
+        } else if (mode == 4) {
+            vec3 dbg_n = estimate_normal(hit_pos, lod_cell_step(hit_lod) * 0.5);
+            c = dbg_n * 0.5 + 0.5;
+        }
+
         o_color = vec4(c, 1.0);
         vec4 clip = u_view_proj * vec4(hit_pos, 1.0);
         float ndc_depth = clip.z / max(clip.w, 1e-8);
@@ -173,7 +236,9 @@ void main() {
         return;
     }
 
-    vec3 n = estimate_normal(hit_pos, cell_step);
+    hit_pos = refine_hit_gradient(hit_pos);
+    int shade_lod = choose_lod(hit_pos);
+    vec3 n = estimate_normal(hit_pos, lod_cell_step(shade_lod) * 0.5);
     vec3 l = normalize(vec3(0.5, 1.0, 0.35));
     vec3 v = normalize(u_camera_pos - hit_pos);
     vec3 h = normalize(l + v);

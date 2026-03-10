@@ -741,7 +741,9 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 		renderer.primary_render_pass, "u_grid_resolution", renderer.marching_cubes_grid_resolution);
 	gl_render_pass_uniform_int(
 		renderer.primary_render_pass, "u_clipmap_levels", static_cast<s32>(renderer.clipmap_levels));
-	gl_render_pass_uniform_int(renderer.primary_render_pass, "u_debug_lod", renderer.debug_show_lod_levels ? 1 : 0);
+	gl_render_pass_uniform_int(renderer.primary_render_pass, "u_debug_surface_mode", renderer.debug_surface_mode);
+	gl_render_pass_uniform_int(
+		renderer.primary_render_pass, "u_debug_lod", renderer.debug_surface_mode == 1 ? 1 : 0);
 	gl_render_pass_uniform_float(renderer.primary_render_pass, "u_iso_level", renderer.marching_cubes_iso_level);
 	gl_render_pass_uniform_mat4(renderer.primary_render_pass, "u_view_proj", camera.proj_mat * camera.view_mat);
 	gl_render_pass_uniform_mat4(
@@ -877,7 +879,7 @@ sg_preview_interaction_t sg_renderer_update_imgui(sg_renderer_t& renderer, bool 
 	sg_preview_interaction_t interaction;
 	f32 const window_width = ImGui::GetIO().DisplaySize.x - 400.0f;
 	f32 const window_height = ImGui::GetIO().DisplaySize.y;
-	f32 const controls_height = 140.0f;
+	f32 const controls_height = 210.0f;
 	f32 const preview_height = std::max(100.0f, window_height - controls_height);
 
 	ImGuiWindowFlags window_flags =
@@ -935,38 +937,43 @@ sg_preview_interaction_t sg_renderer_update_imgui(sg_renderer_t& renderer, bool 
 	ImGui::Text("Remeshed chunks: %u", renderer.marching_cubes_last_remeshed_chunk_count);
 	ImGui::Text("Volume center: %.2f, %.2f, %.2f", renderer.marching_cubes_center.x,
 		renderer.marching_cubes_center.y, renderer.marching_cubes_center.z);
+	f32 const voxel_world_size = (renderer.marching_cubes_bounds_extent * 2.0f) /
+		static_cast<f32>(std::max(1, renderer.marching_cubes_grid_resolution));
+	ImGui::Text("Voxel size (L0): %.4f", voxel_world_size);
 	bool remesh_settings_changed = false;
 
-	ImGui::SetNextItemWidth(140.0f);
-	remesh_settings_changed |= ImGui::DragInt("Grid", &renderer.marching_cubes_grid_resolution, 1.0f, 8, 96);
+	ImGui::SetNextItemWidth(120.0f);
+	remesh_settings_changed |= ImGui::DragInt("Grid", &renderer.marching_cubes_grid_resolution, 1.0f, 8, 512);
 	ImGui::SameLine();
+	ImGui::SetNextItemWidth(90.0f);
 	remesh_settings_changed |= ImGui::DragScalar(
 		"Clipmap Levels", ImGuiDataType_U32, &renderer.clipmap_levels, 1.0f, nullptr, nullptr, "%u");
-
 	ImGui::SameLine();
-	remesh_settings_changed |= ImGui::Checkbox("Smooth Normals", &renderer.marching_cubes_smooth_normals);
-	ImGui::SameLine();
-	ImGui::Checkbox("Debug LOD Colors", &renderer.debug_show_lod_levels);
-
+	ImGui::SetNextItemWidth(110.0f);
+	remesh_settings_changed |=
+		ImGui::DragFloat("Iso", &renderer.marching_cubes_iso_level, 0.005f, -2.0f, 2.0f, "%.3f");
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(120.0f);
 	remesh_settings_changed |=
-		ImGui::DragFloat("Iso", &renderer.marching_cubes_iso_level, 0.005f, -2.0f, 2.0f, "%.3f");
-
-	ImGui::SameLine();
-	ImGui::SetNextItemWidth(140.0f);
-	remesh_settings_changed |=
 		ImGui::DragFloat("Bounds", &renderer.marching_cubes_bounds_extent, 0.05f, 0.5f, 10.0f, "%.2f");
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(120.0f);
+	ImGui::DragInt("Remesh Budget", &renderer.marching_cubes_remesh_budget_chunks, 1.0f, 1, 512);
 
+	remesh_settings_changed |= ImGui::Checkbox("Smooth Normals", &renderer.marching_cubes_smooth_normals);
+	ImGui::SameLine();
+	ImGui::SetNextItemWidth(190.0f);
+	static char const* k_debug_surface_items[] = {"Off", "LOD Colors", "Voxel UVW", "Iso Error", "Normals"};
+	ImGui::Combo(
+		"Debug View", &renderer.debug_surface_mode, k_debug_surface_items, IM_ARRAYSIZE(k_debug_surface_items));
 	ImGui::SameLine();
 	bool center_follow_changed = ImGui::Checkbox("Center On Camera", &renderer.marching_cubes_center_on_camera);
 	if (renderer.marching_cubes_center_on_camera) {
+		ImGui::SameLine();
 		ImGui::SetNextItemWidth(140.0f);
 		center_follow_changed |=
 			ImGui::DragInt("Deadzone Chunks", &renderer.marching_cubes_center_deadzone_chunks, 1.0f, 1, 16);
 	}
-	ImGui::SetNextItemWidth(140.0f);
-	ImGui::DragInt("Remesh Budget", &renderer.marching_cubes_remesh_budget_chunks, 1.0f, 1, 512);
 	if (center_follow_changed) {
 		sg_renderer_mark_all_chunks_dirty(renderer);
 	}
