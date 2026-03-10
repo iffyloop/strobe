@@ -8,6 +8,10 @@ endif()
 
 project(strobe VERSION 0.1.0)
 
+if(APPLE)
+	enable_language(OBJC)
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Export compile commands for LSPs")
 
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)

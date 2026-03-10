@@ -75,7 +75,7 @@ static bool sg_editor_pick_texture_path(std::string& out_path) {
 	nfdfilteritem_t const filters[1] = {
 		{"Images", "png,jpg,jpeg,bmp,tga,gif,webp"},
 	};
-	nfdopendialogu8args_t args = {0};
+	nfdopendialogu8args_t args{};
 	args.filterList = filters;
 	args.filterCount = 1;
 

@@ -9,11 +9,6 @@
 #include "gl_shader.h"
 #include "gl_vertex_buffers.h"
 
-struct sg_renderer_buffer_texture_t {
-	GLuint buffer = 0;
-	GLuint texture = 0;
-};
-
 struct sg_renderer_image_texture_t {
 	GLuint texture = 0;
 	std::string path;
@@ -22,14 +17,8 @@ struct sg_renderer_image_texture_t {
 struct sg_renderer_t {
 	gl_vertex_buffers_t quad_vbo;
 	gl_render_pass_t primary_render_pass;
-	GLuint marching_cubes_program = 0;
 	GLuint marching_cubes_vao = 0;
-	GLuint marching_cubes_vertex_ssbo = 0;
-	GLuint marching_cubes_counter_ssbo = 0;
-	GLuint marching_cubes_indirect_buffer = 0;
-	GLuint marching_cubes_indirect_program = 0;
-	GLuint marching_cubes_density_program = 0;
-	GLuint marching_cubes_density_texture = 0;
+	GLuint marching_cubes_vbo = 0;
 	u32 marching_cubes_vertex_capacity = 0;
 	u32 marching_cubes_vertex_count = 0;
 	u32 marching_cubes_chunk_resolution = 8;
@@ -44,18 +33,8 @@ struct sg_renderer_t {
 	s32 marching_cubes_remesh_budget_chunks = 64;
 	std::vector<u8> marching_cubes_chunk_dirty;
 	std::vector<u32> marching_cubes_chunk_vertex_counts;
-
-	sg_renderer_buffer_texture_t program;
-	sg_renderer_buffer_texture_t primitive_meta;
-	sg_renderer_buffer_texture_t primitive_params;
-	sg_renderer_buffer_texture_t primitive_scale;
-	sg_renderer_buffer_texture_t primitive_bounds;
-	sg_renderer_buffer_texture_t primitive_effect_ranges;
-	sg_renderer_buffer_texture_t effect_meta;
-	sg_renderer_buffer_texture_t effect_params;
-	sg_renderer_buffer_texture_t combine_params;
-	sg_renderer_buffer_texture_t marching_cubes_edge_table;
-	sg_renderer_buffer_texture_t marching_cubes_tri_table;
+	std::vector<GLint> marching_cubes_chunk_draw_first;
+	std::vector<GLsizei> marching_cubes_chunk_draw_count;
 
 	std::string plugin_reload_status;
 
