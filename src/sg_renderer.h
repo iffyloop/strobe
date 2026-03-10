@@ -35,7 +35,7 @@ struct sg_renderer_t {
 	GLuint marching_cubes_indirect_buffer = 0;
 	GLuint marching_cubes_indirect_program = 0;
 	GLuint marching_cubes_density_program = 0;
-	GLuint marching_cubes_density_texture = 0;
+	std::vector<GLuint> marching_cubes_density_textures;
 	u32 marching_cubes_vertex_capacity = 0;
 	u32 marching_cubes_vertex_count = 0;
 	u32 marching_cubes_chunk_resolution = 8;
@@ -44,6 +44,9 @@ struct sg_renderer_t {
 	u32 marching_cubes_chunk_vertex_capacity = 0;
 	u32 marching_cubes_last_remeshed_chunk_count = 0;
 	u32 marching_cubes_chunk_scan_cursor = 0;
+	u32 clipmap_levels = 4;
+	std::vector<std::vector<u8>> clipmap_chunk_dirty;
+	std::vector<u32> clipmap_chunk_scan_cursor;
 	glm::vec3 marching_cubes_center = glm::vec3(0.0f);
 	bool marching_cubes_center_on_camera = false;
 	s32 marching_cubes_center_deadzone_chunks = 2;
