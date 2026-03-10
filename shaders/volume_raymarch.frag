@@ -6,16 +6,20 @@ in vec2 v_uv;
 
 uniform int u_has_scene;
 uniform int u_grid_resolution;
+uniform int u_chunk_resolution;
 uniform float u_iso_level;
 uniform int u_clipmap_levels;
 uniform int u_debug_lod;
 uniform int u_debug_surface_mode;
 uniform vec3 u_bounds_min[4];
 uniform vec3 u_bounds_max[4];
+uniform int u_chunks_per_axis[4];
+uniform int u_brick_pool_dim[4];
 uniform vec3 u_camera_pos;
 uniform mat4 u_view_proj;
 uniform mat4 u_inv_view_proj;
-uniform sampler3D u_density_tex[4];
+uniform isampler3D u_brick_index_tex[4];
+uniform sampler3D u_brick_atlas_tex[4];
 
 vec2 ray_box_intersection(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
     vec3 inv_rd = 1.0 / rd;
@@ -31,11 +35,25 @@ vec2 ray_box_intersection(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
 float density_world_level(vec3 p_world, int level) {
     level = clamp(level, 0, max(u_clipmap_levels - 1, 0));
     float grid_res = float(u_grid_resolution);
-    vec3 grid_pos = ((p_world - u_bounds_min[level]) / (u_bounds_max[level] - u_bounds_min[level])) * grid_res;
-    grid_pos = clamp(grid_pos, vec3(0.0), vec3(grid_res));
-    float tex_dim = grid_res + 1.0;
-    vec3 uvw = (grid_pos + vec3(0.5)) / tex_dim;
-    return texture(u_density_tex[level], uvw).r;
+    int chunk_res = max(u_chunk_resolution, 1);
+
+    vec3 grid_pos_f = ((p_world - u_bounds_min[level]) / (u_bounds_max[level] - u_bounds_min[level])) * grid_res;
+    grid_pos_f = clamp(grid_pos_f, vec3(0.0), vec3(grid_res));
+
+    int chunks_axis = max(u_chunks_per_axis[level], 1);
+    ivec3 gp = ivec3(floor(grid_pos_f));
+    ivec3 chunk = clamp(gp / chunk_res, ivec3(0), ivec3(chunks_axis - 1));
+    ivec4 brick_meta = texelFetch(u_brick_index_tex[level], chunk, 0);
+    if (brick_meta.w <= 0) {
+        return 1e4;
+    }
+
+    int brick_points = chunk_res + 1;
+    vec3 local_f = clamp(grid_pos_f - vec3(chunk * chunk_res), vec3(0.0), vec3(float(chunk_res)));
+    vec3 atlas_pos = vec3(brick_meta.xyz * brick_points) + local_f;
+    float atlas_dim = float(max(u_brick_pool_dim[level], 1));
+    vec3 uvw = (atlas_pos + vec3(0.5)) / atlas_dim;
+    return texture(u_brick_atlas_tex[level], uvw).r;
 }
 
 int choose_lod(vec3 p_world) {
@@ -54,26 +72,38 @@ int choose_lod(vec3 p_world) {
     return max_level;
 }
 
-float distance_to_bounds_edge(vec3 p_world, int level) {
-    vec3 d0 = p_world - u_bounds_min[level];
-    vec3 d1 = u_bounds_max[level] - p_world;
-    vec3 d = min(d0, d1);
-    return min(min(d.x, d.y), d.z);
+float camera_space_linf(vec3 p_world) {
+    vec3 d = abs(p_world - u_camera_pos);
+    return max(max(d.x, d.y), d.z);
 }
 
 float density_world(vec3 p_world) {
     int level = choose_lod(p_world);
+    float camera_dist = camera_space_linf(p_world);
     float d = density_world_level(p_world, level);
 
     int max_level = max(u_clipmap_levels - 1, 0);
     if (level < max_level) {
-        float blend_width = (u_bounds_max[level].x - u_bounds_min[level].x) / float(max(u_grid_resolution, 1));
-        blend_width = max(blend_width * 3.0, 0.001);
-        float edge_dist = distance_to_bounds_edge(p_world, level);
-        if (edge_dist < blend_width) {
-            float t = smoothstep(0.0, blend_width, edge_dist);
+        float half_extent = 0.5 * (u_bounds_max[level].x - u_bounds_min[level].x);
+        float blend_width = max((u_bounds_max[level].x - u_bounds_min[level].x) /
+            float(max(u_grid_resolution, 1)) * 3.0, 0.001);
+        float dist_to_boundary = abs(camera_dist - half_extent);
+        if (dist_to_boundary < blend_width) {
+            float t = smoothstep(half_extent - blend_width, half_extent + blend_width, camera_dist);
             float coarse = density_world_level(p_world, level + 1);
-            d = mix(coarse, d, t);
+            d = mix(d, coarse, t);
+        }
+    }
+
+    if (level > 0) {
+        float half_extent_finer = 0.5 * (u_bounds_max[level - 1].x - u_bounds_min[level - 1].x);
+        float blend_width = max((u_bounds_max[level - 1].x - u_bounds_min[level - 1].x) /
+            float(max(u_grid_resolution, 1)) * 3.0, 0.001);
+        float dist_to_boundary = abs(camera_dist - half_extent_finer);
+        if (dist_to_boundary < blend_width) {
+            float t = smoothstep(half_extent_finer - blend_width, half_extent_finer + blend_width, camera_dist);
+            float finer = density_world_level(p_world, level - 1);
+            d = mix(finer, d, t);
         }
     }
 

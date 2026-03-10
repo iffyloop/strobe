@@ -12,6 +12,7 @@ uniform vec3 u_bounds_max;
 
 uniform ivec3 u_chunk_point_origin;
 uniform ivec3 u_chunk_valid_points;
+uniform ivec3 u_brick_point_origin;
 
 uniform isamplerBuffer u_program_tex;
 uniform isamplerBuffer u_primitive_meta_tex;
@@ -126,5 +127,5 @@ void main() {
     vec3 bounds_size = u_bounds_max - u_bounds_min;
     vec3 p_world = u_bounds_min + (vec3(point) / float(u_grid_resolution)) * bounds_size;
     float dist = eval_scene(p_world).dist;
-    imageStore(u_density_image, point, vec4(dist, 0.0, 0.0, 0.0));
+    imageStore(u_density_image, u_brick_point_origin + local_point, vec4(dist, 0.0, 0.0, 0.0));
 }

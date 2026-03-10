@@ -19,7 +19,7 @@ int main() {
 		std::cerr << "Failed to initialize GLAD" << std::endl;
 		return -1;
 	}
-	glfwSwapInterval(1);
+	glfwSwapInterval(0);
 
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();

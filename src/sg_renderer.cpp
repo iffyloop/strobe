@@ -81,6 +81,52 @@ u32 sg_renderer_chunk_index(u32 x, u32 y, u32 z, u32 chunks_per_axis) {
 	return x + y * chunks_per_axis + z * chunks_per_axis * chunks_per_axis;
 }
 
+u32 sg_renderer_compute_bricks_per_axis(u32 brick_capacity) {
+	brick_capacity = std::max(1u, brick_capacity);
+	f32 const axis_f = std::cbrt(static_cast<f32>(brick_capacity));
+	u32 axis = static_cast<u32>(std::ceil(axis_f));
+	while (axis * axis * axis < brick_capacity) {
+		axis += 1;
+	}
+	return std::max(1u, axis);
+}
+
+bool sg_renderer_chunk_intersects_primitive_spheres(
+	glm::vec3 const& chunk_min, glm::vec3 const& chunk_max, std::vector<glm::vec4> const& primitive_bounds) {
+	for (glm::vec4 const& b : primitive_bounds) {
+		glm::vec3 const center = glm::vec3(b.x, b.y, b.z);
+		f32 const radius = std::max(0.0f, b.w);
+		glm::vec3 const q = glm::clamp(center, chunk_min, chunk_max);
+		glm::vec3 const d = center - q;
+		if (glm::dot(d, d) <= radius * radius) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool sg_renderer_chunk_near_primitive_surfaces(glm::vec3 const& chunk_min, glm::vec3 const& chunk_max,
+	std::vector<glm::vec4> const& primitive_bounds, f32 shell_half_thickness) {
+	shell_half_thickness = std::max(shell_half_thickness, 0.0f);
+	for (glm::vec4 const& b : primitive_bounds) {
+		glm::vec3 const center = glm::vec3(b.x, b.y, b.z);
+		f32 const radius = std::max(0.0f, b.w);
+
+		glm::vec3 const closest = glm::clamp(center, chunk_min, chunk_max);
+		f32 const d_min = glm::length(center - closest);
+
+		glm::vec3 const far_axis = glm::max(glm::abs(center - chunk_min), glm::abs(center - chunk_max));
+		f32 const d_max = glm::length(far_axis);
+
+		f32 const shell_inner = std::max(0.0f, radius - shell_half_thickness);
+		f32 const shell_outer = radius + shell_half_thickness;
+		if (d_min <= shell_outer && d_max >= shell_inner) {
+			return true;
+		}
+	}
+	return false;
+}
+
 glm::vec3 sg_renderer_compute_snapped_center(sg_renderer_t const& renderer, glm::vec3 const& camera_pos) {
 	f32 const extent = std::max(renderer.marching_cubes_bounds_extent, 0.001f);
 	u32 const grid_cells = static_cast<u32>(std::max(1, renderer.marching_cubes_grid_resolution));
@@ -200,13 +246,25 @@ void sg_renderer_destroy_marching_cubes_buffers(sg_renderer_t& renderer) {
 		glDeleteBuffers(1, &renderer.marching_cubes_indirect_buffer);
 		renderer.marching_cubes_indirect_buffer = 0;
 	}
-	for (GLuint& density_texture : renderer.marching_cubes_density_textures) {
-		if (density_texture != 0) {
-			glDeleteTextures(1, &density_texture);
-			density_texture = 0;
+	for (GLuint& texture : renderer.clipmap_brick_atlas_textures) {
+		if (texture != 0) {
+			glDeleteTextures(1, &texture);
+			texture = 0;
 		}
 	}
-	renderer.marching_cubes_density_textures.clear();
+	for (GLuint& texture : renderer.clipmap_brick_index_textures) {
+		if (texture != 0) {
+			glDeleteTextures(1, &texture);
+			texture = 0;
+		}
+	}
+	renderer.clipmap_brick_atlas_textures.clear();
+	renderer.clipmap_brick_index_textures.clear();
+	renderer.clipmap_bricks_per_axis.clear();
+	renderer.clipmap_brick_capacity.clear();
+	renderer.clipmap_chunk_to_brick.clear();
+	renderer.clipmap_free_bricks.clear();
+	renderer.clipmap_brick_index_data.clear();
 	renderer.marching_cubes_vertex_capacity = 0;
 	renderer.marching_cubes_vertex_count = 0;
 	renderer.marching_cubes_chunks_per_axis = 0;
@@ -228,7 +286,8 @@ void sg_renderer_ensure_marching_cubes_buffers(sg_renderer_t& renderer) {
 		renderer.marching_cubes_num_chunks == layout.num_chunks &&
 		renderer.marching_cubes_chunk_vertex_capacity == layout.chunk_vertex_capacity &&
 		renderer.marching_cubes_chunks_per_axis == layout.chunks_per_axis &&
-		renderer.marching_cubes_density_textures.size() == clip_levels &&
+		renderer.clipmap_brick_atlas_textures.size() == clip_levels &&
+		renderer.clipmap_brick_index_textures.size() == clip_levels &&
 		renderer.clipmap_chunk_dirty.size() == clip_levels &&
 		renderer.clipmap_chunk_scan_cursor.size() == clip_levels) {
 		return;
@@ -261,17 +320,51 @@ void sg_renderer_ensure_marching_cubes_buffers(sg_renderer_t& renderer) {
 		static_cast<GLsizeiptr>(sizeof(draw_arrays_indirect_command_t) * initial_commands.size()),
 		initial_commands.data(), GL_DYNAMIC_DRAW);
 
-	renderer.marching_cubes_density_textures.assign(clip_levels, 0);
-	glGenTextures(static_cast<GLsizei>(clip_levels), renderer.marching_cubes_density_textures.data());
-	GLsizei const density_dim = static_cast<GLsizei>(layout.cells_per_axis + 1u);
+	renderer.clipmap_brick_atlas_textures.assign(clip_levels, 0);
+	renderer.clipmap_brick_index_textures.assign(clip_levels, 0);
+	renderer.clipmap_bricks_per_axis.assign(clip_levels, 1u);
+	renderer.clipmap_brick_capacity.assign(clip_levels, 1u);
+	renderer.clipmap_chunk_to_brick.assign(clip_levels, std::vector<s32>(layout.num_chunks, -1));
+	renderer.clipmap_free_bricks.assign(clip_levels, {});
+	renderer.clipmap_brick_index_data.assign(
+		clip_levels, std::vector<glm::ivec4>(layout.num_chunks, glm::ivec4(-1, -1, -1, 0)));
+
+	glGenTextures(static_cast<GLsizei>(clip_levels), renderer.clipmap_brick_atlas_textures.data());
+	glGenTextures(static_cast<GLsizei>(clip_levels), renderer.clipmap_brick_index_textures.data());
+	u32 const brick_points = layout.chunk_resolution + 1u;
 	for (u32 level = 0; level < clip_levels; ++level) {
-		glBindTexture(GL_TEXTURE_3D, renderer.marching_cubes_density_textures[level]);
-		glTexStorage3D(GL_TEXTURE_3D, 1, GL_R32F, density_dim, density_dim, density_dim);
+		u32 const start_capacity = layout.num_chunks;
+		renderer.clipmap_brick_capacity[level] = std::max(1u, start_capacity);
+		renderer.clipmap_bricks_per_axis[level] =
+			sg_renderer_compute_bricks_per_axis(renderer.clipmap_brick_capacity[level]);
+		u32 const atlas_dim = renderer.clipmap_bricks_per_axis[level] * brick_points;
+
+		glBindTexture(GL_TEXTURE_3D, renderer.clipmap_brick_atlas_textures[level]);
+		glTexStorage3D(GL_TEXTURE_3D, 1, GL_R32F, static_cast<GLsizei>(atlas_dim),
+			static_cast<GLsizei>(atlas_dim), static_cast<GLsizei>(atlas_dim));
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+		glBindTexture(GL_TEXTURE_3D, renderer.clipmap_brick_index_textures[level]);
+		glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA32I, static_cast<GLsizei>(layout.chunks_per_axis),
+			static_cast<GLsizei>(layout.chunks_per_axis), static_cast<GLsizei>(layout.chunks_per_axis));
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+		glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, static_cast<GLsizei>(layout.chunks_per_axis),
+			static_cast<GLsizei>(layout.chunks_per_axis), static_cast<GLsizei>(layout.chunks_per_axis),
+			GL_RGBA_INTEGER, GL_INT, renderer.clipmap_brick_index_data[level].data());
+
+		auto& free_list = renderer.clipmap_free_bricks[level];
+		free_list.reserve(renderer.clipmap_brick_capacity[level]);
+		for (u32 i = 0; i < renderer.clipmap_brick_capacity[level]; ++i) {
+			free_list.push_back(renderer.clipmap_brick_capacity[level] - 1u - i);
+		}
 	}
 	glBindTexture(GL_TEXTURE_3D, 0);
 
@@ -621,7 +714,8 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 
 		if (has_dirty_chunk) {
 			if (renderer.marching_cubes_density_program == 0 ||
-				renderer.marching_cubes_density_textures.empty()) {
+				renderer.clipmap_brick_atlas_textures.empty() ||
+				renderer.clipmap_brick_index_textures.empty()) {
 				sg_renderer_mark_all_chunks_dirty(renderer);
 				return;
 			}
@@ -665,10 +759,13 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 			u32 const grid_cells = static_cast<u32>(std::max(1, renderer.marching_cubes_grid_resolution));
 			u32 const budget = static_cast<u32>(std::max(1, renderer.marching_cubes_remesh_budget_chunks));
 			u32 const clip_levels = std::min<u32>(renderer.clipmap_levels,
-				static_cast<u32>(renderer.marching_cubes_density_textures.size()));
+				static_cast<u32>(renderer.clipmap_brick_atlas_textures.size()));
 			for (u32 level = 0; level < clip_levels; ++level) {
 				auto& dirty = renderer.clipmap_chunk_dirty[level];
 				u32& scan_cursor = renderer.clipmap_chunk_scan_cursor[level];
+				auto& chunk_to_brick = renderer.clipmap_chunk_to_brick[level];
+				auto& free_bricks = renderer.clipmap_free_bricks[level];
+				auto& brick_index_data = renderer.clipmap_brick_index_data[level];
 				if (dirty.empty()) {
 					continue;
 				}
@@ -685,8 +782,44 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 					renderer.marching_cubes_center.x + level_extent,
 					renderer.marching_cubes_center.y + level_extent,
 					renderer.marching_cubes_center.z + level_extent);
-				glBindImageTexture(0, renderer.marching_cubes_density_textures[level], 0, GL_TRUE, 0,
+				glBindImageTexture(0, renderer.clipmap_brick_atlas_textures[level], 0, GL_TRUE, 0,
 					GL_WRITE_ONLY, GL_R32F);
+
+				bool index_texture_dirty = false;
+				u32 const bricks_per_axis = renderer.clipmap_bricks_per_axis[level];
+				auto brick_id_to_coord = [&](u32 brick_id) {
+					u32 const z = brick_id / (bricks_per_axis * bricks_per_axis);
+					u32 const rem = brick_id % (bricks_per_axis * bricks_per_axis);
+					u32 const y = rem / bricks_per_axis;
+					u32 const x = rem % bricks_per_axis;
+					return glm::ivec3(
+						static_cast<s32>(x), static_cast<s32>(y), static_cast<s32>(z));
+				};
+				auto release_brick = [&](u32 chunk_idx) {
+					s32 const current = chunk_to_brick[chunk_idx];
+					if (current >= 0) {
+						free_bricks.push_back(static_cast<u32>(current));
+						chunk_to_brick[chunk_idx] = -1;
+						brick_index_data[chunk_idx] = glm::ivec4(-1, -1, -1, 0);
+						index_texture_dirty = true;
+					}
+				};
+				auto ensure_brick = [&](u32 chunk_idx) {
+					s32 current = chunk_to_brick[chunk_idx];
+					if (current >= 0) {
+						return true;
+					}
+					if (free_bricks.empty()) {
+						return false;
+					}
+					u32 const brick_id = free_bricks.back();
+					free_bricks.pop_back();
+					chunk_to_brick[chunk_idx] = static_cast<s32>(brick_id);
+					glm::ivec3 const bc = brick_id_to_coord(brick_id);
+					brick_index_data[chunk_idx] = glm::ivec4(bc, 1);
+					index_texture_dirty = true;
+					return true;
+				};
 
 				u32 const start_idx = scan_cursor % renderer.marching_cubes_num_chunks;
 				u32 scanned = 0;
@@ -714,11 +847,35 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 						static_cast<s32>(std::min(grid_cells, (chunk_x + 1u) * chunk_cells)),
 						static_cast<s32>(std::min(grid_cells, (chunk_y + 1u) * chunk_cells)),
 						static_cast<s32>(std::min(grid_cells, (chunk_z + 1u) * chunk_cells)));
-					glm::ivec3 const point_min =
-						glm::max(chunk_origin - glm::ivec3(1), glm::ivec3(0));
-					glm::ivec3 const point_max = glm::min(
-						chunk_limit + glm::ivec3(1), glm::ivec3(static_cast<s32>(grid_cells)));
-					glm::ivec3 const point_valid = point_max - point_min + glm::ivec3(1);
+
+					glm::vec3 const grid_min =
+						renderer.marching_cubes_center - glm::vec3(level_extent);
+					glm::vec3 const cell_size = glm::vec3(
+						(level_extent * 2.0f) / static_cast<f32>(std::max(1u, grid_cells)));
+					glm::vec3 const chunk_world_min =
+						grid_min + glm::vec3(chunk_origin) * cell_size;
+					glm::vec3 const chunk_world_max = grid_min + glm::vec3(chunk_limit) * cell_size;
+					glm::vec3 const chunk_margin = cell_size * static_cast<f32>(chunk_cells + 1u);
+					f32 const shell_half_thickness = glm::length(chunk_margin);
+					bool const chunk_near_surface = sg_renderer_chunk_near_primitive_surfaces(
+						chunk_world_min - chunk_margin, chunk_world_max + chunk_margin,
+						compiled_scene.primitive_bounds, shell_half_thickness);
+					if (!chunk_near_surface) {
+						release_brick(chunk_idx);
+						dirty[chunk_idx] = 0;
+						continue;
+					}
+
+					if (!ensure_brick(chunk_idx)) {
+						continue;
+					}
+
+					s32 const brick_id = chunk_to_brick[chunk_idx];
+					glm::ivec3 const brick_coord = brick_id_to_coord(static_cast<u32>(brick_id));
+					glm::ivec3 const point_min = chunk_origin;
+					glm::ivec3 const point_valid = chunk_limit - chunk_origin + glm::ivec3(1);
+					glm::ivec3 const brick_point_origin =
+						brick_coord * static_cast<s32>(chunk_cells + 1u);
 
 					glUniform3i(glGetUniformLocation(renderer.marching_cubes_density_program,
 							    "u_chunk_point_origin"),
@@ -726,10 +883,21 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 					glUniform3i(glGetUniformLocation(renderer.marching_cubes_density_program,
 							    "u_chunk_valid_points"),
 						point_valid.x, point_valid.y, point_valid.z);
+					glUniform3i(glGetUniformLocation(renderer.marching_cubes_density_program,
+							    "u_brick_point_origin"),
+						brick_point_origin.x, brick_point_origin.y, brick_point_origin.z);
 					glDispatchCompute(point_groups, point_groups, point_groups);
 					dirty[chunk_idx] = 0;
 				}
 				scan_cursor = (start_idx + scanned) % renderer.marching_cubes_num_chunks;
+				if (index_texture_dirty) {
+					glBindTexture(GL_TEXTURE_3D, renderer.clipmap_brick_index_textures[level]);
+					glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0,
+						static_cast<GLsizei>(chunks_per_axis),
+						static_cast<GLsizei>(chunks_per_axis),
+						static_cast<GLsizei>(chunks_per_axis), GL_RGBA_INTEGER, GL_INT,
+						brick_index_data.data());
+				}
 				glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 			}
 		}
@@ -739,6 +907,8 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 	gl_render_pass_uniform_int(renderer.primary_render_pass, "u_has_scene", compiled_scene.has_output ? 1 : 0);
 	gl_render_pass_uniform_int(
 		renderer.primary_render_pass, "u_grid_resolution", renderer.marching_cubes_grid_resolution);
+	gl_render_pass_uniform_int(renderer.primary_render_pass, "u_chunk_resolution",
+		static_cast<s32>(renderer.marching_cubes_chunk_resolution));
 	gl_render_pass_uniform_int(
 		renderer.primary_render_pass, "u_clipmap_levels", static_cast<s32>(renderer.clipmap_levels));
 	gl_render_pass_uniform_int(renderer.primary_render_pass, "u_debug_surface_mode", renderer.debug_surface_mode);
@@ -767,6 +937,20 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 				renderer.marching_cubes_center.y + level_extent,
 				renderer.marching_cubes_center.z + level_extent);
 		}
+		std::string const chunks_name = "u_chunks_per_axis[" + std::to_string(level) + "]";
+		GLint const chunks_loc =
+			glGetUniformLocation(renderer.primary_render_pass.shader.program, chunks_name.c_str());
+		if (chunks_loc >= 0) {
+			glUniform1i(chunks_loc, static_cast<GLint>(renderer.marching_cubes_chunks_per_axis));
+		}
+		std::string const brick_dim_name = "u_brick_pool_dim[" + std::to_string(level) + "]";
+		GLint const brick_dim_loc =
+			glGetUniformLocation(renderer.primary_render_pass.shader.program, brick_dim_name.c_str());
+		if (brick_dim_loc >= 0 && level < renderer.clipmap_bricks_per_axis.size()) {
+			u32 const atlas_dim = renderer.clipmap_bricks_per_axis[level] *
+				(renderer.marching_cubes_chunk_resolution + 1u);
+			glUniform1i(brick_dim_loc, static_cast<GLint>(atlas_dim));
+		}
 	}
 	GLint const camera_pos_location =
 		glGetUniformLocation(renderer.primary_render_pass.shader.program, "u_camera_pos");
@@ -774,15 +958,24 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 		glUniform3fv(camera_pos_location, 1, glm::value_ptr(camera.pos));
 	}
 	for (u32 level = 0; level < std::min<u32>(renderer.clipmap_levels, 4u) &&
-		level < renderer.marching_cubes_density_textures.size();
+		level < renderer.clipmap_brick_index_textures.size() &&
+		level < renderer.clipmap_brick_atlas_textures.size();
 		++level) {
-		std::string const tex_name = "u_density_tex[" + std::to_string(level) + "]";
-		GLint const tex_loc =
-			glGetUniformLocation(renderer.primary_render_pass.shader.program, tex_name.c_str());
-		if (tex_loc >= 0) {
-			glUniform1i(tex_loc, static_cast<GLint>(level));
+		std::string const index_name = "u_brick_index_tex[" + std::to_string(level) + "]";
+		GLint const index_loc =
+			glGetUniformLocation(renderer.primary_render_pass.shader.program, index_name.c_str());
+		if (index_loc >= 0) {
+			glUniform1i(index_loc, static_cast<GLint>(level));
 			glActiveTexture(GL_TEXTURE0 + level);
-			glBindTexture(GL_TEXTURE_3D, renderer.marching_cubes_density_textures[level]);
+			glBindTexture(GL_TEXTURE_3D, renderer.clipmap_brick_index_textures[level]);
+		}
+		std::string const atlas_name = "u_brick_atlas_tex[" + std::to_string(level) + "]";
+		GLint const atlas_loc =
+			glGetUniformLocation(renderer.primary_render_pass.shader.program, atlas_name.c_str());
+		if (atlas_loc >= 0) {
+			glUniform1i(atlas_loc, static_cast<GLint>(4 + level));
+			glActiveTexture(GL_TEXTURE4 + level);
+			glBindTexture(GL_TEXTURE_3D, renderer.clipmap_brick_atlas_textures[level]);
 		}
 	}
 	gl_render_pass_draw(renderer.primary_render_pass, renderer.quad_vbo);
@@ -793,6 +986,8 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 	glBindTexture(GL_TEXTURE_BUFFER, 0);
 	for (u32 level = 0; level < std::min<u32>(renderer.clipmap_levels, 4u); ++level) {
 		glActiveTexture(GL_TEXTURE0 + level);
+		glBindTexture(GL_TEXTURE_3D, 0);
+		glActiveTexture(GL_TEXTURE4 + level);
 		glBindTexture(GL_TEXTURE_3D, 0);
 	}
 	glActiveTexture(GL_TEXTURE0);

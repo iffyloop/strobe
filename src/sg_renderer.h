@@ -35,7 +35,13 @@ struct sg_renderer_t {
 	GLuint marching_cubes_indirect_buffer = 0;
 	GLuint marching_cubes_indirect_program = 0;
 	GLuint marching_cubes_density_program = 0;
-	std::vector<GLuint> marching_cubes_density_textures;
+	std::vector<GLuint> clipmap_brick_atlas_textures;
+	std::vector<GLuint> clipmap_brick_index_textures;
+	std::vector<u32> clipmap_bricks_per_axis;
+	std::vector<u32> clipmap_brick_capacity;
+	std::vector<std::vector<s32>> clipmap_chunk_to_brick;
+	std::vector<std::vector<u32>> clipmap_free_bricks;
+	std::vector<std::vector<glm::ivec4>> clipmap_brick_index_data;
 	u32 marching_cubes_vertex_capacity = 0;
 	u32 marching_cubes_vertex_count = 0;
 	u32 marching_cubes_chunk_resolution = 8;
