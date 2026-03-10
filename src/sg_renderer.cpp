@@ -105,28 +105,6 @@ bool sg_renderer_chunk_intersects_primitive_spheres(
 	return false;
 }
 
-bool sg_renderer_chunk_near_primitive_surfaces(glm::vec3 const& chunk_min, glm::vec3 const& chunk_max,
-	std::vector<glm::vec4> const& primitive_bounds, f32 shell_half_thickness) {
-	shell_half_thickness = std::max(shell_half_thickness, 0.0f);
-	for (glm::vec4 const& b : primitive_bounds) {
-		glm::vec3 const center = glm::vec3(b.x, b.y, b.z);
-		f32 const radius = std::max(0.0f, b.w);
-
-		glm::vec3 const closest = glm::clamp(center, chunk_min, chunk_max);
-		f32 const d_min = glm::length(center - closest);
-
-		glm::vec3 const far_axis = glm::max(glm::abs(center - chunk_min), glm::abs(center - chunk_max));
-		f32 const d_max = glm::length(far_axis);
-
-		f32 const shell_inner = std::max(0.0f, radius - shell_half_thickness);
-		f32 const shell_outer = radius + shell_half_thickness;
-		if (d_min <= shell_outer && d_max >= shell_inner) {
-			return true;
-		}
-	}
-	return false;
-}
-
 glm::vec3 sg_renderer_compute_snapped_center(sg_renderer_t const& renderer, glm::vec3 const& camera_pos) {
 	f32 const extent = std::max(renderer.marching_cubes_bounds_extent, 0.001f);
 	u32 const grid_cells = static_cast<u32>(std::max(1, renderer.marching_cubes_grid_resolution));
@@ -856,11 +834,10 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 						grid_min + glm::vec3(chunk_origin) * cell_size;
 					glm::vec3 const chunk_world_max = grid_min + glm::vec3(chunk_limit) * cell_size;
 					glm::vec3 const chunk_margin = cell_size * static_cast<f32>(chunk_cells + 1u);
-					f32 const shell_half_thickness = glm::length(chunk_margin);
-					bool const chunk_near_surface = sg_renderer_chunk_near_primitive_surfaces(
+					bool const chunk_active = sg_renderer_chunk_intersects_primitive_spheres(
 						chunk_world_min - chunk_margin, chunk_world_max + chunk_margin,
-						compiled_scene.primitive_bounds, shell_half_thickness);
-					if (!chunk_near_surface) {
+						compiled_scene.primitive_bounds);
+					if (!chunk_active) {
 						release_brick(chunk_idx);
 						dirty[chunk_idx] = 0;
 						continue;
