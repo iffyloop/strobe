@@ -72,6 +72,7 @@ struct sg_renderer_t {
 	f32 marching_cubes_iso_level = 0.0f;
 	f32 marching_cubes_bounds_extent = 32.0f;
 	bool marching_cubes_smooth_normals = true;
+	bool debug_show_lod_levels = false;
 	GLuint checker_texture = 0;
 
 	std::vector<sg_renderer_image_texture_t> primitive_textures;

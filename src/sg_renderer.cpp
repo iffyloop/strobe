@@ -741,6 +741,7 @@ void sg_renderer_update(sg_renderer_t& renderer, sg_compiled_scene_t const& comp
 		renderer.primary_render_pass, "u_grid_resolution", renderer.marching_cubes_grid_resolution);
 	gl_render_pass_uniform_int(
 		renderer.primary_render_pass, "u_clipmap_levels", static_cast<s32>(renderer.clipmap_levels));
+	gl_render_pass_uniform_int(renderer.primary_render_pass, "u_debug_lod", renderer.debug_show_lod_levels ? 1 : 0);
 	gl_render_pass_uniform_float(renderer.primary_render_pass, "u_iso_level", renderer.marching_cubes_iso_level);
 	gl_render_pass_uniform_mat4(renderer.primary_render_pass, "u_view_proj", camera.proj_mat * camera.view_mat);
 	gl_render_pass_uniform_mat4(
@@ -944,6 +945,8 @@ sg_preview_interaction_t sg_renderer_update_imgui(sg_renderer_t& renderer, bool 
 
 	ImGui::SameLine();
 	remesh_settings_changed |= ImGui::Checkbox("Smooth Normals", &renderer.marching_cubes_smooth_normals);
+	ImGui::SameLine();
+	ImGui::Checkbox("Debug LOD Colors", &renderer.debug_show_lod_levels);
 
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(120.0f);
